@@ -24,17 +24,6 @@
         const colorIndex = Number(params.get("color") || 2);
         doc.querySelectorAll(".color-button")[colorIndex]?.click();
 
-        const controlValues = {
-          positionX: params.get("x"),
-          positionY: params.get("y"),
-          scale: params.get("scale"),
-          rotation: params.get("rotation"),
-          opacity: params.get("opacity")
-        };
-        Object.entries(controlValues).forEach(([id, value]) => {
-          if (value !== null) doc.querySelector(`#${id}`).value = value;
-        });
-
         if (params.get("before") === "1") {
           doc.querySelector("#beforeAfterButton").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
         }

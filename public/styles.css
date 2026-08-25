@@ -365,14 +365,6 @@ h2 { font-size: 18px; }
 .color-button.active { color: var(--text); }
 .color-button.active .swatch { border-color: white; outline: 2px solid var(--accent); outline-offset: 3px; transform: translateY(-2px); }
 
-.text-button { padding: 0; border: 0; color: var(--accent); background: none; font-size: 12px; font-weight: 750; }
-.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 13px; margin: 14px 0; border: 1px solid rgba(255,255,255,.045); border-radius: 12px; background: var(--panel-2); }
-.toggle-row span { display: grid; gap: 3px; }
-.toggle-row small { color: var(--muted); }
-.toggle-row input { width: 20px; height: 20px; accent-color: var(--accent-strong); }
-.range-row { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 12px; padding: 7px 0; color: var(--muted); font-size: 12px; }
-.range-row input { width: 100%; accent-color: var(--accent-strong); }
-.range-row:last-of-type { color: var(--accent); }
 .disclaimer { margin-top: 24px; color: var(--muted); font-size: 11px; line-height: 1.55; }
 
 .toast {

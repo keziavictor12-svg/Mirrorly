@@ -54,7 +54,7 @@ Maintain a laptop-local, single-salon experience:
 3. Track position, scale, roll, yaw, and pitch in Live AR, or capture a mirrored still frame.
 4. Show the captured face with every hairstyle in the side cards.
 5. Apply the selected hairstyle and color to the main portrait.
-6. Allow horizontal, vertical, size, rotation, opacity, and 3D-depth adjustment.
+6. Automatically align the hairstyle from the captured MediaPipe face measurement using fixed internal fit defaults; do not expose manual fit controls or a Step 3 section.
 7. After the user presses `Capture + AI merge`, automatically create an identity-preserving AI still that replaces hair pixels instead of layering a PNG.
 8. Save a local PNG preview.
 
@@ -109,7 +109,7 @@ Treat alignment as style-specific. Do not change Bob or Feather calibration when
 - Keep the capture guide large enough for comfortable laptop positioning. The current guide is centered at 45% canvas height with horizontal radius `min(17% canvas width, 19% canvas height)` and vertical radius `min(30% canvas height, 1.46 * horizontal radius)`.
 - Preserve the enlarged desktop preview area in `styles.css`: `min-height: clamp(640px, 72vh, 780px)`. Keep responsive overrides practical for tablet and mobile layouts.
 
-Browser `FaceDetector` support is optional. The bundled MediaPipe model is the primary tracker; keep manual controls functional and clearly labeled when landmark tracking is unavailable. Do not claim pixel-perfect automatic alignment.
+Browser `FaceDetector` support is optional. The bundled MediaPipe model is the primary tracker. Keep alignment automatic with fixed internal defaults, provide retake as the recovery path when measurement is unavailable, and do not claim pixel-perfect automatic alignment.
 
 Live AR is implemented with the bundled MediaPipe Face Landmarker model in `public/models/`, its local WASM runtime in `public/vendor/mediapipe/`, and a local Three.js renderer in `public/ar.js`. Bob Cut and Crew Cut are the first true-3D proof styles: they load CC0 MakeHuman meshes from `public/assets/models/*.glb`, use PBR lighting, a depth-only face occluder, the MediaPipe facial transformation matrix for yaw and pitch, mirrored landmark translation/scale, and crown/head pivots calibrated in `public/app.js`. The other six styles still render as tracked PNG planes and must be described as fallbacks, not true 3D. Keep the plane available while a GLB is loading or if loading fails.
 
@@ -187,7 +187,8 @@ Do not overwrite non-empty remote history without first fetching and reconciling
 
 - Preserve the dark teal and warm-gold salon presentation.
 - Keep women's and men's style labels in the two-column selector.
-- Keep the control panel scrollable so all eight styles and fit controls remain reachable.
+- Keep the control panel scrollable so all eight styles and five colors remain reachable.
+- Keep the customer-facing flow limited to Step 1 (style) and Step 2 (color); do not restore the Step 3 fit-control section unless the user explicitly requests it.
 - Keep the header count synchronized with the catalog.
 - Preserve camera privacy messaging and the simulation disclaimer.
 - Keep the interface responsive for a salon laptop and smaller screens.
@@ -203,7 +204,7 @@ After code or asset changes:
 5. Start Live AR and verify Bob and Crew show the `TRUE 3D` badge, rotate volumetrically, and fall back cleanly if a mesh cannot load.
 6. Capture a face and switch through all eight styles.
 7. Check all five colors on at least one short and one long hairstyle.
-8. Verify retake, before view, fit reset, and save preview.
+8. Verify retake, before view, automatic alignment, and save preview.
 9. If `OPENAI_API_KEY` is configured and funded, verify `Capture + AI merge` automatically creates the still without a separate AI button, replaces original hair, removes the hollow opening and fringe, preserves identity, and saves with an `ai-realistic` filename.
 10. Check for exposed original hairlines, cheek/eye overlap, green or white fringe, hard seams, excessive shadow, and GLB clipping through the face occluder.
 11. Confirm the enlarged capture guide and desktop portrait area remain visible without crowding the controls.

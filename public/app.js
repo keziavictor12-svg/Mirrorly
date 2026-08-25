@@ -13,15 +13,17 @@ const snapshotButton = document.querySelector("#snapshotButton");
 const privacyStatus = document.querySelector("#privacyStatus");
 const selectedLookLabel = document.querySelector("#selectedLookLabel");
 const toast = document.querySelector("#toast");
-const trackingHint = document.querySelector("#trackingHint");
+const trackingHint = cameraStatus;
+// Fit is automatic in the customer-facing UI. Keep stable renderer defaults
+// internally so the MediaPipe measurement remains the single alignment source.
 const controls = {
-  x: document.querySelector("#positionX"),
-  y: document.querySelector("#positionY"),
-  scale: document.querySelector("#scale"),
-  rotation: document.querySelector("#rotation"),
-  opacity: document.querySelector("#opacity"),
-  depth: document.querySelector("#depth"),
-  autoAlign: document.querySelector("#autoAlignToggle")
+  x: { value: 0 },
+  y: { value: 0 },
+  scale: { value: 100 },
+  rotation: { value: 0 },
+  opacity: { value: 100 },
+  depth: { value: 35 },
+  autoAlign: { checked: true }
 };
 
 const colors = [
@@ -1121,19 +1123,6 @@ function render(now = 0) {
   requestAnimationFrame(render);
 }
 
-function resetFit() {
-  clearAiResult();
-  controls.x.value = 0;
-  controls.y.value = 0;
-  controls.scale.value = 100;
-  controls.rotation.value = 0;
-  controls.opacity.value = 100;
-  controls.depth.value = 35;
-  state.detection = null;
-  state.pointer = { x: 0, y: 0 };
-  showToast("3D fit reset");
-}
-
 function setBeforeMode(enabled) {
   state.showOverlay = !enabled;
   beforeAfterButton.textContent = enabled ? "Showing before" : "Hold for before";
@@ -1281,15 +1270,8 @@ canvas.addEventListener("pointerleave", () => {
   state.pointer = { x: 0, y: 0 };
 });
 
-Object.values(controls).forEach((control) => {
-  control?.addEventListener("input", () => {
-    if (state.aiResult) clearAiResult();
-  });
-});
-
 document.querySelector("#startCameraButton").addEventListener("click", startCamera);
 document.querySelector("#demoButton").addEventListener("click", startDemo);
-document.querySelector("#resetButton").addEventListener("click", resetFit);
 liveArButton.addEventListener("click", toggleLiveAr);
 captureFaceButton.addEventListener("click", captureFace);
 snapshotButton.addEventListener("click", saveSnapshot);

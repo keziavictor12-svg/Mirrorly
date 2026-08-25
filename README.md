@@ -33,8 +33,8 @@ Do not place the key in `public/app.js`, HTML, or browser storage. Choose the st
 - Eight photorealistic salon cuts: Bob, Feather, V Cut, U Cut, Crew Cut, Buzz Cut, Curtain Bangs, and Skin Fade
 - Side-card previews showing the captured face with every hairstyle
 - Five common salon hair-colour choices
-- Manual horizontal, vertical, scale, rotation, opacity, and depth controls
-- Automatic face-box alignment when the browser FaceDetector API is available
+- Automatic hairstyle alignment using the bundled MediaPipe face measurement
+- Simplified two-step frontend with no manual fit-control section
 - Local PNG snapshot download
 - Responsive single-salon interface
 - No server-side image storage, accounts, or tracking

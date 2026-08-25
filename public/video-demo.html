@@ -79,16 +79,6 @@
         caption.classList.add("visible");
       }
 
-      async function changeRange(element, value) {
-        await moveTo(element);
-        cursor.classList.add("clicking");
-        element.value = value;
-        element.dispatchEvent(new Event("input", { bubbles: true }));
-        await wait(260);
-        cursor.classList.remove("clicking");
-        await wait(600);
-      }
-
       frame.addEventListener("load", async () => {
         const doc = frame.contentDocument;
         const delay = Number(new URLSearchParams(location.search).get("delay") || 4000);
@@ -100,7 +90,7 @@
         await click(doc.querySelector("#demoButton"));
         await wait(1400);
 
-        showCaption("Choose from four realistic salon cuts");
+        showCaption("Choose from eight realistic salon cuts");
         await click(doc.querySelectorAll(".style-card")[2]);
         await wait(1100);
         await click(doc.querySelectorAll(".style-card")[3]);
@@ -112,12 +102,8 @@
         await click(doc.querySelectorAll(".color-button")[4]);
         await wait(1300);
 
-        showCaption("Fine-tune position, size, rotation, and opacity");
-        await changeRange(doc.querySelector("#positionX"), 38);
-        await changeRange(doc.querySelector("#positionY"), -20);
-        await changeRange(doc.querySelector("#scale"), 116);
-        await changeRange(doc.querySelector("#rotation"), -4);
-        await wait(1400);
+        showCaption("Automatic face measurement aligns the selected hairstyle");
+        await wait(2400);
 
         showCaption("Save the preferred preview locally as a PNG");
         const save = doc.querySelector("#snapshotButton");
