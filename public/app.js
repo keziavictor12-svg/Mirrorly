@@ -205,13 +205,15 @@ const state = {
   aiAvailable: false,
   aiRendering: false,
   aiResult: null,
-  aiRefreshPending: false
+  aiRefreshPending: false,
+  holdCapturedFrame: false
 };
 
 let automaticAiTimer;
 
 function clearAiResult() {
   state.aiResult = null;
+  state.holdCapturedFrame = Boolean(state.capturedFrame && state.captured && !state.demo);
   if (privacyStatus) privacyStatus.textContent = "Live camera stays local; captured still uses AI";
   updateAiButton();
 }
@@ -953,13 +955,13 @@ async function captureFace() {
     await new Promise((resolve) => requestAnimationFrame(() => resolve()));
     await createAiStill();
   } else {
-    cameraStatus.textContent = "Face captured - AR preview ready";
-    showToast("AR preview ready; AI merge is currently unavailable");
+    cameraStatus.textContent = "Face captured - AI merge unavailable";
+    showToast("Captured image held; AI merge is currently unavailable");
   }
 }
 
-function drawPhotorealisticHair() {
-  if (!state.showOverlay) return;
+function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, forceOverlay = false) {
+  if (!state.showOverlay && !forceOverlay) return;
   const hair = getTintedHair(state.style, state.color);
   if (!hair) return;
 
@@ -968,9 +970,9 @@ function drawPhotorealisticHair() {
   const manualY = Number(controls.y.value);
   const depth = Number(controls.depth.value) / 100;
   const opacity = Number(controls.opacity.value) / 100;
-  let faceCenterX = canvas.width / 2 + manualX;
-  let faceCenterY = canvas.height * 0.43 + manualY;
-  let faceWidth = canvas.height * 0.25;
+  let faceCenterX = targetCanvas.width / 2 + manualX;
+  let faceCenterY = targetCanvas.height * 0.43 + manualY;
+  let faceWidth = targetCanvas.height * 0.25;
   let faceHeight = faceWidth * 1.15;
   let automaticRoll = 0;
 
@@ -978,7 +980,7 @@ function drawPhotorealisticHair() {
     const box = state.detection;
     faceCenterX = box.mirrored
       ? (box.centerX ?? box.x + box.width / 2) + manualX
-      : canvas.width - (box.x + box.width / 2) + manualX;
+      : targetCanvas.width - (box.x + box.width / 2) + manualX;
     faceCenterY = (box.centerY ?? box.y + box.height * 0.5) + manualY;
     faceWidth = box.width * 1.02;
     faceHeight = box.height * 1.02;
@@ -996,78 +998,78 @@ function drawPhotorealisticHair() {
   const parallaxX = state.pointer.x * 7 * depth;
   const parallaxY = state.pointer.y * 4 * depth;
 
-  context.save();
-  context.translate(faceCenterX + parallaxX, faceCenterY + parallaxY);
-  context.rotate(automaticRoll + (Number(controls.rotation.value) + state.pointer.x * 1.2 * depth) * Math.PI / 180);
-  context.transform(1, state.pointer.y * 0.012 * depth, state.pointer.x * 0.012 * depth, 1, 0, 0);
+  targetContext.save();
+  targetContext.translate(faceCenterX + parallaxX, faceCenterY + parallaxY);
+  targetContext.rotate(automaticRoll + (Number(controls.rotation.value) + state.pointer.x * 1.2 * depth) * Math.PI / 180);
+  targetContext.transform(1, state.pointer.y * 0.012 * depth, state.pointer.x * 0.012 * depth, 1, 0, 0);
 
   // A soft contact shadow at the forehead and temples visually seats the hair
   // on the captured face instead of leaving a cut-out-looking inner edge.
-  context.save();
-  context.filter = `blur(${Math.max(2, faceWidth * 0.018)}px)`;
-  context.strokeStyle = "rgba(35, 20, 18, .22)";
-  context.lineWidth = Math.max(3, faceWidth * 0.045);
-  context.beginPath();
-  context.ellipse(0, -faceWidth * 0.015, faceWidth * 0.49, faceWidth * 0.64, 0, Math.PI * 1.04, Math.PI * 1.96);
-  context.stroke();
-  context.restore();
+  targetContext.save();
+  targetContext.filter = `blur(${Math.max(2, faceWidth * 0.018)}px)`;
+  targetContext.strokeStyle = "rgba(35, 20, 18, .22)";
+  targetContext.lineWidth = Math.max(3, faceWidth * 0.045);
+  targetContext.beginPath();
+  targetContext.ellipse(0, -faceWidth * 0.015, faceWidth * 0.49, faceWidth * 0.64, 0, Math.PI * 1.04, Math.PI * 1.96);
+  targetContext.stroke();
+  targetContext.restore();
 
   // A faint blurred under-layer feathers flyaways into the photograph.
-  context.save();
-  context.globalAlpha = opacity * 0.30;
-  context.filter = `blur(${Math.max(0.8, drawWidth / 720)}px) saturate(.9)`;
-  context.drawImage(
+  targetContext.save();
+  targetContext.globalAlpha = opacity * 0.30;
+  targetContext.filter = `blur(${Math.max(0.8, drawWidth / 720)}px) saturate(.9)`;
+  targetContext.drawImage(
     hair,
     -drawWidth * 0.5,
     -drawHeight * state.style.faceCenterYRatio,
     drawWidth,
     drawHeight
   );
-  context.restore();
+  targetContext.restore();
 
-  context.globalAlpha = opacity;
-  context.filter = "saturate(.93) contrast(.98) brightness(.985)";
-  context.shadowColor = "rgba(0, 0, 0, .16)";
-  context.shadowBlur = 2 + depth * 3;
-  context.shadowOffsetY = 1 + depth;
-  context.drawImage(
+  targetContext.globalAlpha = opacity;
+  targetContext.filter = "saturate(.93) contrast(.98) brightness(.985)";
+  targetContext.shadowColor = "rgba(0, 0, 0, .16)";
+  targetContext.shadowBlur = 2 + depth * 3;
+  targetContext.shadowOffsetY = 1 + depth;
+  targetContext.drawImage(
     hair,
     -drawWidth * 0.5,
     -drawHeight * state.style.faceCenterYRatio,
     drawWidth,
     drawHeight
   );
-  context.restore();
+  targetContext.restore();
 }
 
-function applyCinematicFinish() {
-  context.save();
+function applyCinematicFinish(targetContext = context, targetCanvas = canvas) {
+  targetContext.save();
 
   // One lighting wash over both layers helps the camera image and hair share
   // the same highlights and shadows without making the result look filtered.
-  context.globalCompositeOperation = "soft-light";
-  const lighting = context.createLinearGradient(0, 0, 0, canvas.height);
+  targetContext.globalCompositeOperation = "soft-light";
+  const lighting = targetContext.createLinearGradient(0, 0, 0, targetCanvas.height);
   lighting.addColorStop(0, "rgba(45, 78, 80, .055)");
   lighting.addColorStop(0.52, "rgba(118, 91, 75, .025)");
   lighting.addColorStop(1, "rgba(191, 119, 70, .09)");
-  context.fillStyle = lighting;
-  context.fillRect(0, 0, canvas.width, canvas.height);
+  targetContext.fillStyle = lighting;
+  targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
 
-  context.globalCompositeOperation = "source-over";
-  const vignette = context.createRadialGradient(
-    canvas.width / 2,
-    canvas.height * 0.44,
-    canvas.height * 0.16,
-    canvas.width / 2,
-    canvas.height * 0.48,
-    canvas.width * 0.72
+  targetContext.globalCompositeOperation = "source-over";
+  const vignette = targetContext.createRadialGradient(
+    targetCanvas.width / 2,
+    targetCanvas.height * 0.44,
+    targetCanvas.height * 0.16,
+    targetCanvas.width / 2,
+    targetCanvas.height * 0.48,
+    targetCanvas.width * 0.72
   );
   vignette.addColorStop(0, "rgba(0,0,0,0)");
   vignette.addColorStop(0.72, "rgba(0,0,0,.035)");
   vignette.addColorStop(1, "rgba(4,10,11,.26)");
-  context.fillStyle = vignette;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.restore();
+  targetContext.fillStyle = vignette;
+  targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  targetContext.restore();
 }
 
 function drawAiResult() {
@@ -1096,6 +1098,9 @@ function render(now = 0) {
   if (state.aiResult) {
     // The AI still is already a fully merged photograph; do not place the AR
     // PNG over it again.
+  } else if (state.holdCapturedFrame && state.capturedFrame) {
+    // Keep the untouched captured portrait visible while the hidden AR
+    // placement guide is prepared and the final AI edit is processing.
   } else if (state.liveAr) {
     applyCinematicFinish();
     window.MirrorlyAR?.update(now, {
@@ -1166,6 +1171,17 @@ function createStyleReferenceDataUrl() {
   return reference.toDataURL("image/png");
 }
 
+function createHiddenArPlacementDataUrl() {
+  const placement = document.createElement("canvas");
+  placement.width = state.capturedFrame.width;
+  placement.height = state.capturedFrame.height;
+  const placementContext = placement.getContext("2d");
+  placementContext.drawImage(state.capturedFrame, 0, 0, placement.width, placement.height);
+  drawPhotorealisticHair(placementContext, placement, true);
+  applyCinematicFinish(placementContext, placement);
+  return placement.toDataURL("image/png");
+}
+
 async function createAiStill() {
   if (!state.capturedFrame || state.demo) {
     showToast("Capture a real face before creating an AI still");
@@ -1182,18 +1198,19 @@ async function createAiStill() {
   }
 
   state.aiRendering = true;
+  state.holdCapturedFrame = true;
   const requestedStyleId = state.style.id;
   const requestedColorName = state.color.name;
   captureFaceButton.disabled = true;
   captureFaceButton.textContent = "Creating AI hairstyle...";
-  cameraStatus.textContent = "AR preview ready - AI hairstyle finishing";
+  cameraStatus.textContent = "Captured image held - AI hairstyle finishing";
   privacyStatus.textContent = "Uploading one captured still for AI hair replacement";
   updateAiButton();
   const aiStartedAt = Date.now();
   const aiProgressTimer = setInterval(() => {
     const elapsedSeconds = Math.max(1, Math.round((Date.now() - aiStartedAt) / 1000));
     captureFaceButton.textContent = `AI finishing... ${elapsedSeconds}s`;
-    cameraStatus.textContent = `AR preview ready - AI finishing (${elapsedSeconds}s)`;
+    cameraStatus.textContent = `Captured image held - AI finishing (${elapsedSeconds}s)`;
   }, 1000);
 
   try {
@@ -1202,7 +1219,7 @@ async function createAiStill() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         portrait: state.capturedFrame.toDataURL("image/png"),
-        arPreview: canvas.toDataURL("image/png"),
+        arPreview: createHiddenArPlacementDataUrl(),
         styleReference: createStyleReferenceDataUrl(),
         styleId: state.style.id,
         colorName: state.color.name
@@ -1220,18 +1237,20 @@ async function createAiStill() {
       return;
     }
     state.aiResult = image;
+    state.holdCapturedFrame = false;
     cameraStatus.textContent = "Realistic AI still ready";
     privacyStatus.textContent = "AI processed one captured still";
     showToast("Realistic hairstyle merged into the photograph");
   } catch (error) {
     console.error("Mirrorly AI still failed", error);
     state.aiResult = null;
-    cameraStatus.textContent = "AR preview ready - AI unavailable";
+    state.holdCapturedFrame = true;
+    cameraStatus.textContent = "Captured image held - AI unavailable";
     privacyStatus.textContent = "Live camera stays local; AI merge unavailable";
     const billingError = /billing|quota|hard limit|spend/i.test(error.message || "");
     showToast(billingError
-      ? "AI billing limit reached; AR preview remains available"
-      : (error.message || "AI merge failed; AR preview remains available"));
+      ? "AI billing limit reached; captured image remains visible"
+      : (error.message || "AI merge failed; captured image remains visible"));
   } finally {
     clearInterval(aiProgressTimer);
     state.aiRendering = false;
