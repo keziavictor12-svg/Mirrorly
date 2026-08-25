@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#16121f" />
+    <title>Mirrorly - 3D Salon Hairstyle Preview</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">3D SALON MIRROR</p>
+        <h1>Mirrorly</h1>
+      </div>
+      <div class="status-wrap">
+        <span id="privacyStatus" class="privacy-status">Live camera stays local; captured still uses AI</span>
+        <span id="cameraStatus" class="camera-status">Camera off</span>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="preview-card" aria-label="Hairstyle preview">
+        <div class="preview-hud" aria-live="polite">
+          <span class="live-dot"></span>
+          <span>3D TRY-ON</span>
+          <strong id="selectedLookLabel">Bob Cut / Chestnut Brown</strong>
+        </div>
+        <canvas id="previewCanvas" width="960" height="720"></canvas>
+        <canvas id="arCanvas" width="960" height="720" hidden aria-label="Live augmented-reality hairstyle layer"></canvas>
+        <video id="cameraVideo" playsinline muted hidden></video>
+        <div id="emptyState" class="empty-state">
+          <div class="face-placeholder" aria-hidden="true"></div>
+          <h2>Start the camera</h2>
+          <p>Live video stays local. The frozen photo is sent only after you choose Capture + AI merge.</p>
+          <button id="startCameraButton" class="primary-button">Allow camera</button>
+          <button id="demoButton" class="secondary-button">Try demo mode</button>
+        </div>
+        <div class="preview-toolbar">
+          <div class="toolbar-group">
+            <button id="liveArButton" class="glass-button ar-button" disabled>Start live AR</button>
+            <button id="captureFaceButton" class="capture-button" disabled>Capture + AI merge</button>
+          </div>
+          <button id="snapshotButton" class="glass-button" disabled>Save preview</button>
+        </div>
+      </section>
+
+      <aside class="control-panel">
+        <section>
+          <div class="section-heading">
+            <div>
+              <p class="step-label">STEP 1</p>
+              <h2>Choose a style</h2>
+            </div>
+            <span id="styleCount" class="count-pill">8 salon cuts</span>
+          </div>
+          <div id="styleGrid" class="style-grid" role="radiogroup" aria-label="Hairstyles"></div>
+        </section>
+
+        <section>
+          <p class="step-label">STEP 2</p>
+          <h2>Choose a color</h2>
+          <div id="colorGrid" class="color-grid" role="radiogroup" aria-label="Hair colors"></div>
+        </section>
+
+        <section>
+          <div class="section-heading">
+            <div>
+              <p class="step-label">STEP 3</p>
+              <h2>Adjust the fit</h2>
+            </div>
+            <button id="resetButton" class="text-button">Reset</button>
+          </div>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Automatic alignment</strong>
+              <small id="trackingHint">Uses face detection when supported</small>
+            </span>
+            <input id="autoAlignToggle" type="checkbox" checked />
+          </label>
+
+          <label class="range-row">
+            <span>Horizontal</span>
+            <input id="positionX" type="range" min="-300" max="300" value="0" />
+          </label>
+          <label class="range-row">
+            <span>Vertical</span>
+            <input id="positionY" type="range" min="-260" max="260" value="0" />
+          </label>
+          <label class="range-row">
+            <span>Size</span>
+            <input id="scale" type="range" min="45" max="180" value="100" />
+          </label>
+          <label class="range-row">
+            <span>Rotation</span>
+            <input id="rotation" type="range" min="-35" max="35" value="0" />
+          </label>
+          <label class="range-row">
+            <span>Opacity</span>
+            <input id="opacity" type="range" min="30" max="100" value="100" />
+          </label>
+          <label class="range-row">
+            <span>3D depth</span>
+            <input id="depth" type="range" min="0" max="100" value="35" />
+          </label>
+        </section>
+
+        <p class="disclaimer">This preview is a visual simulation. Actual cut and color results will vary.</p>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.min.js",
+          "three/addons/": "./vendor/three/addons/"
+        }
+      }
+    </script>
+    <script src="ar.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

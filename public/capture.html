@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mirrorly capture</title>
+    <style>
+      html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; overflow: hidden; background: #0d0a12; }
+    </style>
+  </head>
+  <body>
+    <iframe id="app" src="index.html"></iframe>
+    <script>
+      const params = new URLSearchParams(location.search);
+      document.querySelector("#app").addEventListener("load", () => {
+        const doc = document.querySelector("#app").contentDocument;
+        if (params.get("mode") !== "start") {
+          doc.querySelector("#demoButton").click();
+        }
+
+        const styleIndex = Number(params.get("style") || 0);
+        doc.querySelectorAll(".style-card")[styleIndex]?.click();
+
+        const colorIndex = Number(params.get("color") || 2);
+        doc.querySelectorAll(".color-button")[colorIndex]?.click();
+
+        const controlValues = {
+          positionX: params.get("x"),
+          positionY: params.get("y"),
+          scale: params.get("scale"),
+          rotation: params.get("rotation"),
+          opacity: params.get("opacity")
+        };
+        Object.entries(controlValues).forEach(([id, value]) => {
+          if (value !== null) doc.querySelector(`#${id}`).value = value;
+        });
+
+        if (params.get("before") === "1") {
+          doc.querySelector("#beforeAfterButton").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        }
+      });
+    </script>
+  </body>
+</html>

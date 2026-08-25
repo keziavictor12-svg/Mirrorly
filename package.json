@@ -1,0 +1,18 @@
+{
+  "name": "mirrorly-laptop-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local 3D salon hairstyle preview with eight cuts and five colours",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/ar.js",
+    "build:3d-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Mirrorly3DAssets.ps1"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "obj2gltf": "^3.2.0"
+  }
+}

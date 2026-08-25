@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mirrorly video demo</title>
+    <style>
+      html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; overflow: hidden; background: #0d0a12; }
+      #cursor {
+        position: fixed;
+        z-index: 10;
+        left: 50%;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        margin: -9px 0 0 -9px;
+        border: 3px solid white;
+        border-radius: 50%;
+        background: #b86fe8;
+        box-shadow: 0 0 0 5px rgba(184,111,232,.28), 0 4px 18px rgba(0,0,0,.45);
+        transition: left .75s cubic-bezier(.22,.8,.3,1), top .75s cubic-bezier(.22,.8,.3,1), transform .16s ease;
+        pointer-events: none;
+      }
+      #cursor.clicking { transform: scale(.72); }
+      #caption {
+        position: fixed;
+        z-index: 9;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%) translateY(12px);
+        padding: 11px 20px;
+        border: 1px solid rgba(255,255,255,.16);
+        border-radius: 999px;
+        color: #f7f2fb;
+        background: rgba(17,12,23,.84);
+        box-shadow: 0 10px 35px rgba(0,0,0,.36);
+        font: 700 17px/1.2 "Segoe UI", sans-serif;
+        letter-spacing: .01em;
+        opacity: 0;
+        transition: opacity .3s ease, transform .3s ease;
+        pointer-events: none;
+      }
+      #caption.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+    </style>
+  </head>
+  <body>
+    <iframe id="app" src="index.html"></iframe>
+    <div id="cursor"></div>
+    <div id="caption"></div>
+    <script>
+      const frame = document.querySelector("#app");
+      const cursor = document.querySelector("#cursor");
+      const caption = document.querySelector("#caption");
+      const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+      function centerOf(element) {
+        const box = element.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      }
+
+      async function moveTo(element) {
+        const point = centerOf(element);
+        cursor.style.left = `${point.x}px`;
+        cursor.style.top = `${point.y}px`;
+        await wait(850);
+      }
+
+      async function click(element) {
+        await moveTo(element);
+        cursor.classList.add("clicking");
+        await wait(150);
+        element.click();
+        cursor.classList.remove("clicking");
+        await wait(750);
+      }
+
+      function showCaption(text) {
+        caption.textContent = text;
+        caption.classList.add("visible");
+      }
+
+      async function changeRange(element, value) {
+        await moveTo(element);
+        cursor.classList.add("clicking");
+        element.value = value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        await wait(260);
+        cursor.classList.remove("clicking");
+        await wait(600);
+      }
+
+      frame.addEventListener("load", async () => {
+        const doc = frame.contentDocument;
+        const delay = Number(new URLSearchParams(location.search).get("delay") || 4000);
+        cursor.style.left = "50%";
+        cursor.style.top = "62%";
+        await wait(delay);
+
+        showCaption("Start with the camera — or explore safely in demo mode");
+        await click(doc.querySelector("#demoButton"));
+        await wait(1400);
+
+        showCaption("Choose from four realistic salon cuts");
+        await click(doc.querySelectorAll(".style-card")[2]);
+        await wait(1100);
+        await click(doc.querySelectorAll(".style-card")[3]);
+        await wait(1300);
+
+        showCaption("Try five familiar salon hair colours");
+        await click(doc.querySelectorAll(".color-button")[3]);
+        await wait(1000);
+        await click(doc.querySelectorAll(".color-button")[4]);
+        await wait(1300);
+
+        showCaption("Fine-tune position, size, rotation, and opacity");
+        await changeRange(doc.querySelector("#positionX"), 38);
+        await changeRange(doc.querySelector("#positionY"), -20);
+        await changeRange(doc.querySelector("#scale"), 116);
+        await changeRange(doc.querySelector("#rotation"), -4);
+        await wait(1400);
+
+        showCaption("Save the preferred preview locally as a PNG");
+        const save = doc.querySelector("#snapshotButton");
+        await moveTo(save);
+        cursor.classList.add("clicking");
+        await wait(150);
+        const toast = doc.querySelector("#toast");
+        toast.textContent = "Preview saved on this laptop";
+        toast.classList.add("visible");
+        cursor.classList.remove("clicking");
+        await wait(2900);
+
+        showCaption("Mirrorly — private, local, and ready for salon testing");
+        cursor.style.left = "91%";
+        cursor.style.top = "8%";
+        await wait(4200);
+        caption.classList.remove("visible");
+      });
+    </script>
+  </body>
+</html>
