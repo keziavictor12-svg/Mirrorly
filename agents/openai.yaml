@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mirrorly Salon App"
+  short_description: "Build and maintain the Mirrorly salon try-on"
+  default_prompt: "Use $mirrorly to update and verify the local Mirrorly hairstyle try-on app."
