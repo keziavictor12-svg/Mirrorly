@@ -36,6 +36,13 @@ const hairColors = new Set([
   "Golden Blonde"
 ]);
 
+const aiRenderSettings = Object.freeze({
+  model: "gpt-image-2",
+  quality: "medium",
+  outputFormat: "jpeg",
+  outputCompression: "90"
+});
+
 function sendJson(response, status, payload) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -105,12 +112,14 @@ async function renderAiHairstyle(request, response) {
     ].join(" ");
 
     const form = new FormData();
-    form.append("model", "gpt-image-2");
+    form.append("model", aiRenderSettings.model);
     form.append("image[]", new Blob([portrait], { type: "image/png" }), "portrait.png");
     form.append("image[]", new Blob([arPreview], { type: "image/png" }), "ar-placement-preview.png");
     form.append("image[]", new Blob([styleReference], { type: "image/png" }), "hairstyle-reference.png");
     form.append("prompt", prompt);
-    form.append("quality", "high");
+    form.append("quality", aiRenderSettings.quality);
+    form.append("output_format", aiRenderSettings.outputFormat);
+    form.append("output_compression", aiRenderSettings.outputCompression);
 
     const apiResponse = await fetch("https://api.openai.com/v1/images/edits", {
       method: "POST",
@@ -124,7 +133,7 @@ async function renderAiHairstyle(request, response) {
     }
     const imageBase64 = result.data?.[0]?.b64_json;
     if (!imageBase64) throw new Error("The image model returned no image");
-    sendJson(response, 200, { image: `data:image/png;base64,${imageBase64}` });
+    sendJson(response, 200, { image: `data:image/jpeg;base64,${imageBase64}` });
   } catch (error) {
     console.error("Mirrorly AI still failed:", error.message);
     sendJson(response, 500, { error: error.message || "AI still rendering failed" });
@@ -137,7 +146,9 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && decodedPath === "/api/ai-status") {
     sendJson(response, 200, {
       available: Boolean(process.env.OPENAI_API_KEY),
-      model: "gpt-image-2"
+      model: aiRenderSettings.model,
+      quality: aiRenderSettings.quality,
+      outputFormat: aiRenderSettings.outputFormat
     });
     return;
   }

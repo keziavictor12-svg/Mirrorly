@@ -20,7 +20,7 @@ $env:OPENAI_API_KEY='your-key-set-locally'
 npm start
 ```
 
-Do not place the key in `public/app.js`, HTML, or browser storage. Choose the style and color, then select **Capture + AI merge**. Mirrorly measures the face, displays the AR fit, and automatically requests the realistic merged still. There is no separate AI-render button.
+Do not place the key in `public/app.js`, HTML, or browser storage. Choose the style and color, then select **Capture + AI merge**. Mirrorly measures the face, displays the AR fit, and automatically requests the realistic merged still. There is no separate AI-render button. To reduce waiting time while retaining salon-preview quality, the server keeps all three high-fidelity alignment inputs but requests medium-quality JPEG output with `output_compression=90`. The AR preview stays visible and shows elapsed time while the AI edit finishes.
 
 ## Included in this first build
 

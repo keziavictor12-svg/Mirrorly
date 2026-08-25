@@ -1186,9 +1186,15 @@ async function createAiStill() {
   const requestedColorName = state.color.name;
   captureFaceButton.disabled = true;
   captureFaceButton.textContent = "Creating AI hairstyle...";
-  cameraStatus.textContent = "AI hair replacement in progress";
+  cameraStatus.textContent = "AR preview ready - AI hairstyle finishing";
   privacyStatus.textContent = "Uploading one captured still for AI hair replacement";
   updateAiButton();
+  const aiStartedAt = Date.now();
+  const aiProgressTimer = setInterval(() => {
+    const elapsedSeconds = Math.max(1, Math.round((Date.now() - aiStartedAt) / 1000));
+    captureFaceButton.textContent = `AI finishing... ${elapsedSeconds}s`;
+    cameraStatus.textContent = `AR preview ready - AI finishing (${elapsedSeconds}s)`;
+  }, 1000);
 
   try {
     const response = await fetch("/api/ai-render", {
@@ -1227,6 +1233,7 @@ async function createAiStill() {
       ? "AI billing limit reached; AR preview remains available"
       : (error.message || "AI merge failed; AR preview remains available"));
   } finally {
+    clearInterval(aiProgressTimer);
     state.aiRendering = false;
     captureFaceButton.disabled = false;
     captureFaceButton.textContent = "Retake face";
