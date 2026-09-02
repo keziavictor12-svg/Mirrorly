@@ -513,6 +513,24 @@
     }
   }
 
+  function getStatus(now = performance.now()) {
+    return {
+      enabled,
+      tracking: now - lastFaceAt < 420,
+      styleId: styleProfile?.id || "",
+      renderMode: activeHairModel && activeModelStyleId === styleProfile?.id ? "3d" : "png",
+      pose: {
+        x: current.x,
+        y: current.y,
+        width: current.width,
+        height: current.height,
+        roll: current.roll,
+        yaw: current.yaw,
+        pitch: current.pitch
+      }
+    };
+  }
+
   function dispose() {
     setEnabled(false);
     clearActiveModel();
@@ -540,5 +558,5 @@
     landmarker?.close();
   }
 
-  window.MirrorlyAR = { initialize, setHair, setEnabled, update, measureImage, dispose };
+  window.MirrorlyAR = { initialize, setHair, setEnabled, update, measureImage, getStatus, dispose };
 })();

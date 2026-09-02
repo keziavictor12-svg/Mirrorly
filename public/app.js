@@ -216,15 +216,15 @@ let automaticAiTimer;
 function clearAiResult() {
   state.aiResult = null;
   state.holdCapturedFrame = Boolean(state.capturedFrame && state.captured && !state.demo);
-  if (privacyStatus) privacyStatus.textContent = "Live camera stays local; captured still uses AI";
+  if (privacyStatus) privacyStatus.textContent = "Live AI tracking stays on this laptop";
   updateAiButton();
 }
 
 function updateAiButton() {
   if (!captureFaceButton) return;
   captureFaceButton.title = state.aiAvailable
-    ? "Capture, measure, and automatically create the realistic AI hairstyle"
-    : "Capture locally; AI merge will resume when API access is available";
+    ? "Optional: freeze the current pose and create a realistic AI hairstyle photo"
+    : "Optional photo is local; generative AI merge resumes when API access is available";
 }
 
 function scheduleAutomaticAiStill() {
@@ -273,19 +273,19 @@ if ("FaceDetector" in window) {
     detector = null;
   }
 }
-trackingHint.textContent = "478-point Live AR tracking available";
+trackingHint.textContent = "Live AI face tracking is ready";
 
 window.addEventListener("mirrorly-ar-model", (event) => {
   const detail = event.detail || {};
   if (detail.styleId && detail.styleId !== state.style.id) return;
   if (detail.status === "loading") {
     trackingHint.textContent = state.liveAr
-      ? "Loading the local true-3D hairstyle mesh"
-      : "Preparing the true-3D mesh for Live AR";
+      ? "Live tracking active - loading the true-3D hairstyle"
+      : "Preparing the true-3D hairstyle for live AI AR";
   } else if (detail.status === "ready") {
     trackingHint.textContent = state.liveAr
-      ? "True 3D GLB + MediaPipe head-pose tracking active"
-      : "True 3D mesh ready - start Live AR to test it";
+      ? "Live AI head tracking + true-3D hairstyle active"
+      : "True-3D hairstyle ready for live AI AR";
   } else if (detail.status === "fallback") {
     trackingHint.textContent = "3D mesh unavailable - transparent PNG fallback active";
   } else if (detail.status === "png-fallback") {
@@ -296,7 +296,7 @@ window.addEventListener("mirrorly-ar-model", (event) => {
 function updateSelectedLook() {
   selectedLookLabel.textContent = state.captured || state.demo || state.liveAr
     ? `${state.style.name} / ${state.color.name}`
-    : "Position your face and capture";
+    : "Starting live hairstyle tracking";
 }
 
 function createStyleButtons() {
@@ -325,9 +325,13 @@ function createStyleButtons() {
         item.setAttribute("aria-checked", String(selected));
       });
       updateSelectedLook();
-      trackingHint.textContent = style.model3d
-        ? "True 3D mesh available - start Live AR to test it"
-        : "PNG preview for this style; GLB conversion is pending";
+      trackingHint.textContent = state.liveAr
+        ? (style.model3d
+          ? "Live tracking active - loading the true-3D hairstyle"
+          : "Live tracking active with the fitted hairstyle overlay")
+        : (style.model3d
+          ? "True-3D hairstyle ready for live AI AR"
+          : "This hairstyle is ready for live AI AR");
       renderStylePreviews();
       syncArHair();
       scheduleAutomaticAiStill();
@@ -400,13 +404,14 @@ async function startCamera() {
     cameraStatus.textContent = "Camera active";
     cameraStatus.classList.add("active");
     if (beforeAfterButton) beforeAfterButton.disabled = false;
-    captureFaceButton.disabled = false;
-    captureFaceButton.textContent = "Capture + AI merge";
-    liveArButton.disabled = false;
+    captureFaceButton.disabled = true;
+    captureFaceButton.textContent = "Optional AI photo";
+    liveArButton.disabled = true;
     snapshotButton.disabled = true;
     updateSelectedLook();
     renderStylePreviews();
     requestAnimationFrame(render);
+    await startLiveAr({ automatic: true });
   } catch (error) {
     showToast(error.name === "NotAllowedError" ? "Camera permission was not granted." : "Unable to start the camera.");
   }
@@ -439,8 +444,8 @@ async function measureCapturedFace(capturedFrame) {
     console.error("Mirrorly captured-face measurement failed", error);
     state.detection = null;
     cameraStatus.textContent = "Face captured";
-    trackingHint.textContent = "Measurement unavailable - manual fit remains available";
-    showToast("Face measurement failed; use the fit controls");
+    trackingHint.textContent = "Measurement unavailable - guide-based fit active";
+    showToast("Face measurement failed; return to the live mirror and try again");
   } finally {
     state.arLoading = false;
     captureFaceButton.disabled = false;
@@ -452,34 +457,32 @@ function stopLiveAr(showMessage = true) {
   window.MirrorlyAR?.setEnabled(false);
   arCanvas.hidden = true;
   liveArButton.classList.remove("active");
-  liveArButton.textContent = "Start live AR";
+  liveArButton.textContent = "Start live AI AR";
   liveArButton.disabled = false;
   captureFaceButton.disabled = false;
   snapshotButton.disabled = true;
   cameraStatus.textContent = "Camera active";
-  trackingHint.textContent = "478-point Live AR tracking available";
+  trackingHint.textContent = "Live AI AR paused";
   updateSelectedLook();
-  if (showMessage) showToast("Live AR stopped - capture mode restored");
+  if (showMessage) showToast("Live AI AR paused");
 }
 
-async function toggleLiveAr() {
-  if (state.liveAr) {
-    stopLiveAr();
-    return;
-  }
+async function startLiveAr({ automatic = false } = {}) {
+  if (state.liveAr) return true;
   if (state.demo || state.captured) {
-    showToast("Retake the face before starting Live AR");
-    return;
+    if (!automatic) showToast("Return to the live mirror before starting live AI AR");
+    return false;
   }
   if (video.readyState < 2 || !video.videoWidth || state.arLoading) {
-    showToast("Wait for the camera image, then try Live AR");
-    return;
+    if (!automatic) showToast("Wait for the camera image, then try live AI AR");
+    return false;
   }
 
   state.arLoading = true;
   liveArButton.disabled = true;
-  liveArButton.textContent = "Loading AR...";
-  trackingHint.textContent = "Loading local face landmark model";
+  captureFaceButton.disabled = true;
+  liveArButton.textContent = "Loading live AI AR...";
+  trackingHint.textContent = "Loading the local AI face tracker";
   try {
     await window.MirrorlyAR.initialize(arCanvas, video);
     state.arReady = true;
@@ -489,23 +492,33 @@ async function toggleLiveAr() {
     arCanvas.hidden = false;
     liveArButton.disabled = false;
     liveArButton.classList.add("active");
-    liveArButton.textContent = "Stop live AR";
-    captureFaceButton.disabled = true;
+    liveArButton.textContent = "Pause live AI AR";
+    captureFaceButton.disabled = false;
     snapshotButton.disabled = false;
-    cameraStatus.textContent = "Live AR active";
+    cameraStatus.textContent = "Live AI AR active";
     trackingHint.textContent = state.style.model3d
-      ? "Loading the local true-3D hairstyle mesh"
-      : "MediaPipe tracking live with PNG fallback";
+      ? "Live tracking active - loading the true-3D hairstyle"
+      : "Live AI face tracking active with fitted hairstyle";
     updateSelectedLook();
-    showToast("Live AR ready - move your head naturally");
+    showToast("Live AI AR is ready - the hairstyle will follow your movement");
+    return true;
   } catch (error) {
-    console.error("Mirrorly Live AR initialization failed", error);
+    console.error("Mirrorly live AI AR initialization failed", error);
     stopLiveAr(false);
-    trackingHint.textContent = "Live AR unavailable - manual capture still works";
-    showToast("Live AR could not start; capture mode is still available");
+    trackingHint.textContent = "Live AI AR unavailable - optional AI photo still works";
+    showToast("Live AI AR could not start; the optional photo mode is still available");
+    return false;
   } finally {
     state.arLoading = false;
   }
+}
+
+async function toggleLiveAr() {
+  if (state.liveAr) {
+    stopLiveAr();
+    return;
+  }
+  await startLiveAr();
 }
 
 function startDemo() {
@@ -895,7 +908,7 @@ function drawCaptureGuide() {
   context.ellipse(centerX, centerY, guideRadiusX, guideRadiusY, 0, 0, Math.PI * 2);
   context.stroke();
   context.setLineDash([]);
-  const message = "Position your face inside the guide, then select Capture + AI merge";
+  const message = "Position your face inside the guide, then start live AI AR";
   context.font = `600 ${Math.max(15, canvas.width / 68)}px system-ui`;
   const textWidth = context.measureText(message).width;
   context.fillStyle = "rgba(5, 13, 14, .78)";
@@ -916,20 +929,23 @@ async function captureFace() {
     state.capturedFrame = null;
     state.detection = null;
     clearAiResult();
-    captureFaceButton.textContent = "Capture + AI merge";
-    liveArButton.disabled = false;
+    captureFaceButton.textContent = "Optional AI photo";
+    captureFaceButton.disabled = true;
+    liveArButton.disabled = true;
     snapshotButton.disabled = true;
     cameraStatus.textContent = "Camera active";
-    trackingHint.textContent = "478-point Live AR tracking available";
+    trackingHint.textContent = "Restarting live AI face tracking";
     updateSelectedLook();
     renderStylePreviews();
-    showToast("Ready for a new face capture");
+    showToast("Returning to the live AI mirror");
+    await startLiveAr({ automatic: true });
     return;
   }
   if (video.readyState < 2 || !video.videoWidth) {
     showToast("Wait for the camera image, then try again");
     return;
   }
+  if (state.liveAr) stopLiveAr(false);
   controls.x.value = 0;
   controls.y.value = 0;
   controls.scale.value = 100;
@@ -945,7 +961,7 @@ async function captureFace() {
   state.capturedFrame = capturedFrame;
   state.captured = true;
   clearAiResult();
-  captureFaceButton.textContent = "Retake face";
+  captureFaceButton.textContent = "Return to live mirror";
   liveArButton.disabled = true;
   snapshotButton.disabled = false;
   cameraStatus.textContent = "Face captured";
@@ -1235,7 +1251,7 @@ async function createAiStill() {
     state.aiResult = null;
     state.holdCapturedFrame = true;
     cameraStatus.textContent = "Captured image held - AI unavailable";
-    privacyStatus.textContent = "Live camera stays local; AI merge unavailable";
+    privacyStatus.textContent = "Live AI tracking stays local; AI photo unavailable";
     const billingError = /billing|quota|hard limit|spend/i.test(error.message || "");
     showToast(billingError
       ? "AI billing limit reached; captured image remains visible"
@@ -1244,7 +1260,7 @@ async function createAiStill() {
     clearInterval(aiProgressTimer);
     state.aiRendering = false;
     captureFaceButton.disabled = false;
-    captureFaceButton.textContent = "Retake face";
+    captureFaceButton.textContent = "Return to live mirror";
     updateAiButton();
     if (state.aiRefreshPending) {
       state.aiRefreshPending = false;
