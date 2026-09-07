@@ -72,7 +72,7 @@ h2 { font-size: 18px; }
   letter-spacing: 0.18em;
 }
 
-.status-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.status-wrap { display: none; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .privacy-status, .camera-status, .count-pill {
   padding: 8px 12px;
   border: 1px solid var(--line);
