@@ -21,7 +21,7 @@ Work only inside `C:\Users\DELL\mirrorly` unless the user explicitly expands sco
 - Secure API-key setup and server restart: `Set-MirrorlyApiKey-And-Restart.ps1`
 - Final and source hairstyle assets: `MirrorlyLaptopApp/public/assets/hair/`
 - Browser-ready true-3D hairstyles: `MirrorlyLaptopApp/public/assets/models/`
-- Licensed 3D source meshes and textures: `MirrorlyLaptopApp/assets-source/makehuman-cc0/`
+- Licensed 3D source meshes and textures: `MirrorlyLaptopApp/assets-source/makehuman-cc0/` and `MirrorlyLaptopApp/assets-source/makehuman-cc-by/`
 - Reproducible OBJ-to-GLB build: `MirrorlyLaptopApp/scripts/Build-Mirrorly3DAssets.ps1`
 - Internal GLB loader test: `MirrorlyLaptopApp/public/3d-smoke-test.html`
 - Concept presentation and video/reference materials: `Mirrorly_Video/`
@@ -52,7 +52,7 @@ Maintain a laptop-local, single-salon experience:
 1. Start the webcam locally.
 2. Automatically enter Live AI AR after camera permission; do not require a captured photo to begin the hairstyle try-on.
 3. Track face position, scale, roll, yaw, and pitch continuously and keep the selected hairstyle attached as the user moves.
-4. Apply every style and color change immediately to the moving live overlay; Bob and Crew use true 3D and the other six use tracked PNG fallbacks.
+4. Apply every style and color change immediately to the moving live overlay; all eight styles use textured true-3D GLBs, with tracked PNG fallback only while a model loads or if it fails.
 5. Keep Optional AI photo as a secondary action that freezes the current pose and preserves the captured-face side-card workflow.
 6. Automatically align live and captured hairstyles from MediaPipe measurements using fixed internal fit defaults; do not expose manual fit controls or a Step 3 section.
 7. When the user explicitly selects Optional AI photo, create an identity-preserving AI still that replaces hair pixels instead of layering a PNG.
@@ -111,9 +111,9 @@ Treat alignment as style-specific. Do not change Bob or Feather calibration when
 
 Browser `FaceDetector` support is optional. The bundled MediaPipe model is the primary tracker. Keep alignment automatic with fixed internal defaults, provide retake as the recovery path when measurement is unavailable, and do not claim pixel-perfect automatic alignment.
 
-Live AI AR is implemented with the bundled MediaPipe Face Landmarker model in public/models/, its local WASM runtime in public/vendor/mediapipe/, and the local Three.js renderer in public/ar.js. It starts automatically after camera permission. Hairstyle selection and color changes call the renderer immediately without capture. The read-only MirrorlyAR.getStatus() hook exposes enabled/tracking state, renderer mode, style ID, and numeric pose data for trial verification; it must not expose camera pixels or identity data. Bob Cut and Crew Cut are the first true-3D proof styles: they load CC0 MakeHuman meshes from public/assets/models/*.glb, use PBR lighting, a depth-only face occluder, the MediaPipe facial transformation matrix for yaw and pitch, mirrored landmark translation/scale, and crown/head pivots calibrated in public/app.js. The other six styles still render as tracked PNG planes and must be described as fallbacks, not true 3D. Keep the plane available while a GLB is loading or if loading fails.
+Live AI AR is implemented with the bundled MediaPipe Face Landmarker model in public/models/, its local WASM runtime in public/vendor/mediapipe/, and the local Three.js renderer in public/ar.js. It starts automatically after camera permission. Hairstyle selection and color changes call the renderer immediately without capture. The read-only MirrorlyAR.getStatus() hook exposes enabled/tracking state, renderer mode, style ID, and numeric pose data for trial verification; it must not expose camera pixels or identity data. All eight hairstyles load textured GLBs from public/assets/models/*.glb. Bob and Crew are direct mesh conversions; Feather uses the attributed CC BY 4.0 `o4saken_long01` source; V, U, Buzz, Curtain Bangs, and Skin Fade are deterministic geometry variants of CC0 MakeHuman system meshes. They use PBR lighting, a depth-only face occluder, the MediaPipe facial transformation matrix for yaw and pitch, mirrored landmark translation/scale, and per-style crown/head pivots calibrated in public/app.js. Keep the tracked PNG plane available while a GLB is loading or if loading fails.
 
-For additional true-3D hairstyles:
+For maintaining or adding true-3D hairstyles:
 
 1. Put licensed source OBJ, textures, and license notes under `assets-source/`; never lose provenance.
 2. Add an MTL with diffuse/normal textures and run `npm run build:3d-assets` to create browser-ready GLBs.
@@ -200,10 +200,10 @@ After code or asset changes:
 
 1. Run `npm run check` in `MirrorlyLaptopApp`.
 2. Confirm `/`, `app.js`, every referenced hairstyle PNG, and every configured GLB return HTTP 200.
-3. Open `/3d-smoke-test.html` and confirm both CC0 proof meshes load before testing the camera.
+3. Open `/3d-smoke-test.html` and confirm all eight labeled GLB meshes load and rotate before testing the camera.
 4. Open a cache-busted URL in Edge.
-5. Select Start live AI mirror and confirm Live AI AR starts automatically without a capture step; verify Bob and Crew show the TRUE 3D badge, rotate volumetrically, and fall back cleanly if a mesh cannot load.
-6. Move the test face and verify the pose changes while tracking stays active; switch through all eight styles live, confirming Bob and Crew use true 3D and the six remaining styles use tracked PNG fallback.
+5. Select Start live AI mirror and confirm Live AI AR starts automatically without a capture step; verify all eight styles show the TRUE 3D badge, rotate volumetrically, and fall back cleanly if a mesh cannot load.
+6. Move the test face and verify the pose changes while tracking stays active; switch through all eight styles live and confirm each reports renderer mode `model3d` after its GLB is ready.
 7. Check all five colors on at least one short and one long hairstyle.
 8. Verify pause/restart, Optional AI photo, return to live mirror, automatic alignment, and save preview.
 9. If OPENAI_API_KEY is configured and funded, verify Optional AI photo creates the still without changing the live try-on into a capture-first flow, replaces original hair, removes the hollow opening and fringe, preserves identity, and saves with an ai-realistic filename.
@@ -214,8 +214,8 @@ After code or asset changes:
 ## Known limitations
 
 - Captured-photo alignment is guide-based when measurement is unavailable; the primary Live AI AR path uses the bundled MediaPipe tracker.
-- Bob and Crew have geometric depth occlusion, but Live AI AR does not yet perform semantic hair/ear segmentation. The optional AI photo handles final photographic blending when billing is available.
+- All eight GLB styles have geometric depth occlusion, but Live AI AR does not yet perform semantic hair/ear segmentation. The optional AI photo handles final photographic blending when billing is available.
 - GPT Image editing is intentionally not called per video frame; live movement comes from local MediaPipe tracking plus Three.js rendering.
-- Feather, V, U, Buzz, Curtain Bangs, and Skin Fade remain PNG fallbacks until calibrated GLBs are sourced or generated.
+- The six newly added GLB profiles use a balanced adult-head first-pass calibration; validate and refine their anchors across diverse real faces before production salon rollout.
 - Color tinting recolors the overlay, not the customer's original hair.
 - The app is browser-based and is not yet packaged as a Windows executable.

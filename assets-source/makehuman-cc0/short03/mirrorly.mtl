@@ -1,0 +1,8 @@
+newmtl MirrorlyHair
+Ka 0.11 0.11 0.11
+Kd 1.00 1.00 1.00
+Ks 0.05 0.05 0.05
+Ns 96
+d 1.0
+illum 2
+map_Kd short03_diffuse.png

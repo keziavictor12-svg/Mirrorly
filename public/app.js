@@ -74,6 +74,18 @@ const hairstyles = [
     name: "Feather Cut",
     description: "Soft feathered layers",
     asset: "assets/hair/feather-cut.png",
+    model3d: {
+      id: "feather-cc-by",
+      src: "assets/models/feather-cc-by.glb",
+      license: "CC BY 4.0 / 04saken via MakeHuman Community",
+      anchor: [0.06, 6.72, 0.24],
+      canonicalFaceWidth: 1.5,
+      yOffsetRatio: -0.025,
+      occluderDepth: 0.68,
+      occluderWidthRatio: 0.81,
+      occluderHeightRatio: 1.04,
+      alphaTest: 0.045
+    },
     faceOpeningRatio: 0.25,
     faceOpeningHeightRatio: 0.40,
     faceCenterYRatio: 0.39,
@@ -97,6 +109,18 @@ const hairstyles = [
     name: "V Cut",
     description: "Long layers with a V point",
     asset: "assets/hair/v-cut.png",
+    model3d: {
+      id: "v-cut-cc0",
+      src: "assets/models/v-cut-cc0.glb",
+      license: "CC0 / MakeHuman system long01, Mirrorly V-shape",
+      anchor: [0, 6.58, 0.24],
+      canonicalFaceWidth: 1.5,
+      yOffsetRatio: -0.025,
+      occluderDepth: 0.7,
+      occluderWidthRatio: 0.8,
+      occluderHeightRatio: 1.04,
+      alphaTest: 0.055
+    },
     faceOpeningRatio: 0.26,
     faceOpeningHeightRatio: 0.31,
     faceCenterYRatio: 0.34,
@@ -121,6 +145,18 @@ const hairstyles = [
     name: "U Cut",
     description: "Long rounded U-shaped finish",
     asset: "assets/hair/u-cut.png",
+    model3d: {
+      id: "u-cut-cc0",
+      src: "assets/models/u-cut-cc0.glb",
+      license: "CC0 / MakeHuman system long01, Mirrorly U-shape",
+      anchor: [0, 6.58, 0.24],
+      canonicalFaceWidth: 1.5,
+      yOffsetRatio: -0.025,
+      occluderDepth: 0.7,
+      occluderWidthRatio: 0.8,
+      occluderHeightRatio: 1.04,
+      alphaTest: 0.055
+    },
     faceOpeningRatio: 0.33,
     faceOpeningHeightRatio: 0.31,
     faceCenterYRatio: 0.34,
@@ -166,6 +202,18 @@ const hairstyles = [
     name: "Buzz Cut",
     description: "Short, even clipper finish",
     asset: "assets/hair/buzz-cut.png",
+    model3d: {
+      id: "buzz-cut-cc0",
+      src: "assets/models/buzz-cut-cc0.glb",
+      license: "CC0 / MakeHuman system short02, Mirrorly clipper shaping",
+      anchor: [0, 7.98, 0.42],
+      canonicalFaceWidth: 1.46,
+      yOffsetRatio: -0.045,
+      occluderDepth: 0.76,
+      occluderWidthRatio: 0.82,
+      occluderHeightRatio: 1.01,
+      alphaTest: 0.075
+    },
     faceOpeningRatio: 0.62,
     faceCenterYRatio: 0.59
   },
@@ -175,6 +223,18 @@ const hairstyles = [
     name: "Curtain Bangs",
     description: "Center-parted sweeping fringe",
     asset: "assets/hair/curtain-bangs.png",
+    model3d: {
+      id: "curtain-bangs-cc0",
+      src: "assets/models/curtain-bangs-cc0.glb",
+      license: "CC0 / MakeHuman system short03, Mirrorly center-part shaping",
+      anchor: [-0.03, 6.93, 0.38],
+      canonicalFaceWidth: 1.46,
+      yOffsetRatio: -0.015,
+      occluderDepth: 0.72,
+      occluderWidthRatio: 0.81,
+      occluderHeightRatio: 1.03,
+      alphaTest: 0.065
+    },
     faceOpeningRatio: 0.29,
     faceCenterYRatio: 0.47
   },
@@ -184,6 +244,18 @@ const hairstyles = [
     name: "Skin Fade",
     description: "Textured top with a close fade",
     asset: "assets/hair/skin-fade.png",
+    model3d: {
+      id: "skin-fade-cc0",
+      src: "assets/models/skin-fade-cc0.glb",
+      license: "CC0 / MakeHuman system short04, Mirrorly fade shaping",
+      anchor: [0, 7.46, 0.4],
+      canonicalFaceWidth: 1.46,
+      yOffsetRatio: -0.04,
+      occluderDepth: 0.75,
+      occluderWidthRatio: 0.82,
+      occluderHeightRatio: 1.01,
+      alphaTest: 0.07
+    },
     faceOpeningRatio: 0.60,
     faceCenterYRatio: 0.59
   }

@@ -31,7 +31,8 @@ Do not place the key in `public/app.js`, HTML, or browser storage. The key is no
 - Optional local face capture that freezes the current pose for a photographic AI render
 - Automatic captured-face measurement using the bundled 478-point model, including face center, size, and roll
 - Optional GPT Image 2 still rendering that receives the original portrait, AR placement preview, and selected hairstyle reference, then replaces and blends the hair as photographic pixels
-- Eight photorealistic salon cuts: Bob, Feather, V Cut, U Cut, Crew Cut, Buzz Cut, Curtain Bangs, and Skin Fade
+- Eight salon cuts: Bob, Feather, V Cut, U Cut, Crew Cut, Buzz Cut, Curtain Bangs, and Skin Fade
+- A textured volumetric GLB for every cut, with immediate style/color switching and tracked PNG fallback during a load failure
 - Side-card previews showing the captured face with every hairstyle
 - Five common salon hair-colour choices
 - Automatic hairstyle alignment using the bundled MediaPipe face measurement
@@ -42,7 +43,7 @@ Do not place the key in `public/app.js`, HTML, or browser storage. The key is no
 
 ## Prototype limitations
 
-- Bob and Crew use volumetric GLB meshes in live AR; Feather, V, U, Buzz, Curtain Bangs, and Skin Fade use tracked PNG-plane fallbacks.
+- All eight cuts use volumetric GLB meshes in live AR; the tracked PNG plane is retained only while a mesh loads or if its GLB cannot load.
 - Live AI AR remains an approximate tracked overlay; frame-by-frame generative image editing is not used because remote image generation is not interactive. Realistic hairline integration is available through the optional photo when API billing is available.
 - Color choices recolor the hairstyle asset rather than the customer's existing hair.
 - The application currently runs in a browser rather than as a packaged Windows executable.

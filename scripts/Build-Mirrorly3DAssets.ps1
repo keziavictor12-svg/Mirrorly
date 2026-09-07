@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $appRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $sourceRoot = Join-Path $appRoot "assets-source\makehuman-cc0"
+$ccBySourceRoot = Join-Path $appRoot "assets-source\makehuman-cc-by"
 $outputRoot = Join-Path $appRoot "public\assets\models"
 
 function Resize-Png {
@@ -51,6 +52,99 @@ function Convert-HairModel {
     }
 }
 
+function New-HairVariant {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Copy", "V", "U", "Buzz", "Curtain", "Fade")]
+        [string]$Shape
+    )
+
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    $output = New-Object System.Collections.Generic.List[string]
+    $output.Add("# Mirrorly browser-ready derivative; original source and license metadata remain in this folder.")
+    $output.Add("# Rebuild with scripts/Build-Mirrorly3DAssets.ps1. Shape: $Shape")
+    $output.Add("mtllib mirrorly.mtl")
+
+    foreach ($line in [IO.File]::ReadLines($SourcePath)) {
+        if ($line.StartsWith("mtllib ", [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        if ($line.StartsWith("vn ")) {
+            continue
+        }
+        if ($line.StartsWith("f ")) {
+            $faceParts = $line.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+            $vertices = for ($index = 1; $index -lt $faceParts.Length; $index++) {
+                $indices = $faceParts[$index].Split("/")
+                if ($indices.Length -gt 1 -and $indices[1]) {
+                    "$($indices[0])/$($indices[1])"
+                } else {
+                    $indices[0]
+                }
+            }
+            $output.Add("f " + ($vertices -join " "))
+            continue
+        }
+        if (-not $line.StartsWith("v ")) {
+            $output.Add($line)
+            continue
+        }
+
+        $parts = $line.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+        $x = [double]::Parse($parts[1], $invariant)
+        $y = [double]::Parse($parts[2], $invariant)
+        $z = [double]::Parse($parts[3], $invariant)
+
+        switch ($Shape) {
+            "V" {
+                if ($y -lt 2.45) {
+                    $xRatio = [Math]::Min(1.0, [Math]::Abs($x) / 1.2707)
+                    $floor = 0.94 + 1.18 * $xRatio
+                    if ($y -lt $floor) {
+                        $y = $floor + [Math]::Max(0, $y - 0.8366) * 0.06
+                    }
+                }
+            }
+            "U" {
+                if ($y -lt 2.35) {
+                    $xRatio = [Math]::Min(1.0, [Math]::Abs($x) / 1.2707)
+                    $floor = 1.02 + 0.92 * [Math]::Pow($xRatio, 2)
+                    if ($y -lt $floor) {
+                        $y = $floor + [Math]::Max(0, $y - 0.8366) * 0.08
+                    }
+                }
+            }
+            "Buzz" {
+                $x *= 0.94
+                $y = 7.42 + ($y - 7.42) * 0.55
+                $z = 0.35 + ($z - 0.35) * 0.94
+            }
+            "Curtain" {
+                if ($z -gt 0.55 -and $y -lt 7.55 -and [Math]::Abs($x) -lt 0.32) {
+                    $falloff = 1 - [Math]::Abs($x) / 0.32
+                    $side = if ($x -lt 0) { -1 } else { 1 }
+                    $x += $side * 0.16 * $falloff
+                    $y += 0.72 * $falloff
+                    $z += 0.04 * $falloff
+                }
+            }
+            "Fade" {
+                if ($y -lt 7.45) {
+                    $fade = [Math]::Min(1.0, [Math]::Max(0, (7.45 - $y) / 0.98))
+                    $x *= 1 - 0.16 * $fade
+                    $z = 0.35 + ($z - 0.35) * (1 - 0.12 * $fade)
+                }
+            }
+        }
+
+        $output.Add("v $($x.ToString("0.000000", $invariant)) $($y.ToString("0.000000", $invariant)) $($z.ToString("0.000000", $invariant))")
+    }
+
+    [IO.File]::WriteAllLines($DestinationPath, $output, [Text.UTF8Encoding]::new($false))
+}
+
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
 $bobRoot = Join-Path $sourceRoot "toigo_curled_under_bob"
@@ -60,5 +154,32 @@ Resize-Png -Source (Join-Path $bobRoot "BakedHairNORMAL.png") -Destination (Join
 Convert-HairModel -SourcePath (Join-Path $bobRoot "bob_curled_under.obj") -DestinationPath (Join-Path $outputRoot "bob-cc0.glb")
 Convert-HairModel -SourcePath (Join-Path $sourceRoot "short01\short01.obj") -DestinationPath (Join-Path $outputRoot "short-cc0.glb")
 
-Get-Item (Join-Path $outputRoot "bob-cc0.glb"), (Join-Path $outputRoot "short-cc0.glb") |
+$variants = @(
+    @{ Root = $ccBySourceRoot; Folder = "o4saken_long01"; Source = "o4saken_long01.obj"; Prepared = "feather-mirrorly.obj"; Shape = "Copy"; Output = "feather-cc-by.glb" },
+    @{ Folder = "long01"; Source = "long01.obj"; Prepared = "v-cut-mirrorly.obj"; Shape = "V"; Output = "v-cut-cc0.glb" },
+    @{ Folder = "long01"; Source = "long01.obj"; Prepared = "u-cut-mirrorly.obj"; Shape = "U"; Output = "u-cut-cc0.glb" },
+    @{ Folder = "short02"; Source = "short02.obj"; Prepared = "buzz-cut-mirrorly.obj"; Shape = "Buzz"; Output = "buzz-cut-cc0.glb" },
+    @{ Folder = "short03"; Source = "short03.obj"; Prepared = "curtain-bangs-mirrorly.obj"; Shape = "Curtain"; Output = "curtain-bangs-cc0.glb" },
+    @{ Folder = "short04"; Source = "short04.obj"; Prepared = "skin-fade-mirrorly.obj"; Shape = "Fade"; Output = "skin-fade-cc0.glb" }
+)
+
+foreach ($variant in $variants) {
+    $variantRoot = if ($variant.ContainsKey("Root")) { $variant.Root } else { $sourceRoot }
+    $folder = Join-Path $variantRoot $variant.Folder
+    $prepared = Join-Path $folder $variant.Prepared
+    New-HairVariant -SourcePath (Join-Path $folder $variant.Source) -DestinationPath $prepared -Shape $variant.Shape
+    Convert-HairModel -SourcePath $prepared -DestinationPath (Join-Path $outputRoot $variant.Output)
+}
+
+$modelNames = @(
+    "bob-cc0.glb",
+    "feather-cc-by.glb",
+    "v-cut-cc0.glb",
+    "u-cut-cc0.glb",
+    "short-cc0.glb",
+    "buzz-cut-cc0.glb",
+    "curtain-bangs-cc0.glb",
+    "skin-fade-cc0.glb"
+)
+Get-Item ($modelNames | ForEach-Object { Join-Path $outputRoot $_ }) |
     Select-Object Name, Length

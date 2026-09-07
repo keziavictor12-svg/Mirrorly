@@ -3,11 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Mirrorly 3D asset smoke test</title>
+    <title>Mirrorly all-hairstyle 3D trial</title>
     <style>
-      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: #f4dfb6; background: #071112; font: 14px system-ui; }
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: #f4dfb6; background: radial-gradient(circle at 50% 35%, #173334 0%, #071112 68%); font: 14px system-ui; }
       canvas { display: block; width: 100%; height: 100%; }
-      #status { position: fixed; top: 16px; left: 16px; z-index: 1; padding: 9px 12px; border: 1px solid #345; border-radius: 999px; background: rgba(4, 12, 13, .82); }
+      #status { position: fixed; top: 16px; left: 50%; z-index: 2; margin: 0; padding: 9px 14px; border: 1px solid #80683e; border-radius: 999px; background: rgba(4, 12, 13, .88); transform: translateX(-50%); }
+      #legend { position: fixed; left: 50%; bottom: 16px; z-index: 2; display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 6px; width: min(760px, calc(100% - 24px)); transform: translateX(-50%); }
+      #legend span { padding: 7px 9px; border: 1px solid rgba(244, 223, 182, .22); border-radius: 8px; background: rgba(4, 12, 13, .78); text-align: center; }
+      @media (max-width: 620px) { #legend { grid-template-columns: repeat(2, 1fr); } }
     </style>
     <script type="importmap">
       {
@@ -19,25 +24,36 @@
     </script>
   </head>
   <body>
-    <p id="status">Loading CC0 GLB hairstyles…</p>
+    <p id="status">Loading all eight volumetric hairstyles...</p>
+    <div id="legend" aria-label="3D hairstyle order"></div>
     <script type="module">
       import * as THREE from "three";
       import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
-      document.querySelector("#status").textContent = "Module graph loaded; creating WebGL renderer…";
+      const assets = [
+        { label: "Bob Cut", src: "./assets/models/bob-cc0.glb", tint: "#70432f" },
+        { label: "Feather Cut", src: "./assets/models/feather-cc-by.glb", tint: "#cba669" },
+        { label: "V Cut", src: "./assets/models/v-cut-cc0.glb", tint: "#35231d" },
+        { label: "U Cut", src: "./assets/models/u-cut-cc0.glb", tint: "#ad5b37" },
+        { label: "Crew Cut", src: "./assets/models/short-cc0.glb", tint: "#171417" },
+        { label: "Buzz Cut", src: "./assets/models/buzz-cut-cc0.glb", tint: "#70432f" },
+        { label: "Curtain Bangs", src: "./assets/models/curtain-bangs-cc0.glb", tint: "#cba669" },
+        { label: "Skin Fade", src: "./assets/models/skin-fade-cc0.glb", tint: "#35231d" }
+      ];
+      const status = document.querySelector("#status");
+      const legend = document.querySelector("#legend");
+      legend.innerHTML = assets.map((asset) => `<span>${asset.label}</span>`).join("");
       document.body.dataset.moduleStatus = "passed";
 
       const loader = new GLTFLoader();
       let loadedAssets;
       try {
-        loadedAssets = await Promise.all([
-          loader.loadAsync("./assets/models/bob-cc0.glb"),
-          loader.loadAsync("./assets/models/short-cc0.glb")
-        ]);
-        document.querySelector("#status").textContent = "GLB meshes parsed; creating WebGL renderer…";
+        loadedAssets = await Promise.all(assets.map((asset) => loader.loadAsync(asset.src)));
+        status.textContent = "Eight GLB meshes parsed; creating WebGL renderer...";
         document.body.dataset.assetStatus = "passed";
+        document.body.dataset.assetCount = String(loadedAssets.length);
       } catch (error) {
-        document.querySelector("#status").textContent = `FAIL — ${error.message}`;
+        status.textContent = `FAIL - ${error.message}`;
         document.body.dataset.assetStatus = "failed";
         throw error;
       }
@@ -46,47 +62,47 @@
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.1;
-      document.body.append(renderer.domElement);
+      renderer.toneMappingExposure = 1.12;
+      document.body.prepend(renderer.domElement);
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100);
-      camera.position.set(0, 0.2, 7);
-      scene.add(new THREE.HemisphereLight(0xffead2, 0x152728, 2));
-      const key = new THREE.DirectionalLight(0xffd7a4, 3);
+      camera.position.set(0, 0.15, 9.4);
+      scene.add(new THREE.HemisphereLight(0xffead2, 0x152728, 2.2));
+      const key = new THREE.DirectionalLight(0xffd7a4, 3.2);
       key.position.set(-3, 4, 5);
       scene.add(key);
-      const rim = new THREE.DirectionalLight(0x9bd8d2, 2);
+      const rim = new THREE.DirectionalLight(0x9bd8d2, 2.2);
       rim.position.set(4, 1, 2);
       scene.add(rim);
 
       const group = new THREE.Group();
       scene.add(group);
 
-      function fitModel(root, x, tint) {
+      function fitModel(root, index, tint) {
         root.traverse((object) => {
           if (!object.isMesh) return;
           if (!object.geometry.attributes.normal) object.geometry.computeVertexNormals();
           object.material = object.material.clone();
           object.material.color.set(tint);
           object.material.side = THREE.DoubleSide;
-          object.material.alphaTest = 0.04;
+          object.material.alphaTest = 0.045;
           object.material.transparent = true;
         });
         const box = new THREE.Box3().setFromObject(root);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
-        root.position.sub(center);
-        root.scale.setScalar(2.5 / Math.max(size.x, size.y, size.z));
+        const fittedScale = 1.75 / Math.max(size.x, size.y, size.z);
+        root.scale.setScalar(fittedScale);
+        root.position.copy(center).multiplyScalar(-fittedScale);
         const mount = new THREE.Group();
-        mount.position.x = x;
+        mount.position.set((index % 4 - 1.5) * 2.15, index < 4 ? 1.25 : -1.25, 0);
         mount.add(root);
         group.add(mount);
       }
 
-      fitModel(loadedAssets[0].scene, -1.45, "#70432f");
-      fitModel(loadedAssets[1].scene, 1.45, "#171417");
-      document.querySelector("#status").textContent = "PASS — Bob and short GLB meshes loaded";
+      loadedAssets.forEach((gltf, index) => fitModel(gltf.scene, index, assets[index].tint));
+      status.textContent = "PASS - all eight true-3D hairstyles loaded";
       document.body.dataset.testStatus = "passed";
 
       function resize() {
@@ -98,7 +114,7 @@
       resize();
 
       function render(now) {
-        group.rotation.y = Math.sin(now * 0.00045) * 0.45;
+        group.rotation.y = Math.sin(now * 0.00045) * 0.38;
         renderer.render(scene, camera);
         requestAnimationFrame(render);
       }
