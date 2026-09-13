@@ -2,12 +2,17 @@
   let THREE;
   let GLTFLoader;
   let FaceLandmarker;
+  let ImageSegmenter;
   let FilesetResolver;
   let landmarker;
+  let hairSegmenter;
+  let hairSegmenterPromise;
+  let visionFileset;
   let renderer;
   let scene;
   let camera;
   let hairMesh;
+  let hairFrontMesh;
   let hairModelMount;
   let faceOccluder;
   let activeHairModel;
@@ -15,6 +20,7 @@
   let activeModelStyleId = "";
   let modelLoader;
   let hairTexture;
+  let hairFrontTexture;
   let outputCanvas;
   let videoElement;
   let initializationPromise;
@@ -26,6 +32,7 @@
   let landmarkerMode = "VIDEO";
   let measuringImage = false;
   let modelLoadVersion = 0;
+  let trackedHairVisible = false;
   const modelCache = new Map();
 
   const current = {
@@ -39,6 +46,9 @@
     modelScale: 1,
     faceWidth: 1,
     faceHeight: 1,
+    faceCenterX: 0,
+    faceCenterY: 0,
+    foreheadY: 0,
     opacity: 0
   };
 
@@ -66,6 +76,37 @@
     }
   }
 
+  async function createHairSegmenter(delegate) {
+    return ImageSegmenter.createFromOptions(visionFileset, {
+      baseOptions: {
+        modelAssetPath: './models/hair_segmenter.tflite',
+        delegate
+      },
+      runningMode: 'IMAGE',
+      outputCategoryMask: false,
+      outputConfidenceMasks: true
+    });
+  }
+
+  async function getHairSegmenter() {
+    if (!hairSegmenterPromise) {
+      hairSegmenterPromise = (async () => {
+        try {
+          return await createHairSegmenter('GPU');
+        } catch {
+          return createHairSegmenter('CPU');
+        }
+      })();
+    }
+    try {
+      hairSegmenter = await hairSegmenterPromise;
+      return hairSegmenter;
+    } catch (error) {
+      hairSegmenterPromise = null;
+      throw error;
+    }
+  }
+
   async function initialize(canvas, video) {
     if (initializationPromise) return initializationPromise;
     initializationPromise = (async () => {
@@ -75,6 +116,7 @@
         import("./vendor/three/addons/loaders/GLTFLoader.js")
       ]);
       FaceLandmarker = visionModule.FaceLandmarker;
+      ImageSegmenter = visionModule.ImageSegmenter;
       FilesetResolver = visionModule.FilesetResolver;
       THREE = threeModule;
       GLTFLoader = gltfModule.GLTFLoader;
@@ -83,12 +125,14 @@
 
       const vision = await FilesetResolver.forVisionTasks("./vendor/mediapipe/wasm");
       landmarker = await createLandmarker(vision);
+      visionFileset = vision;
 
       renderer = new THREE.WebGLRenderer({
         canvas: outputCanvas,
         alpha: true,
         antialias: true,
         premultipliedAlpha: true,
+        preserveDrawingBuffer: true,
         powerPreference: "high-performance"
       });
       renderer.setClearColor(0x000000, 0);
@@ -123,6 +167,22 @@
       hairMesh.visible = false;
       hairMesh.rotation.order = "XYZ";
       scene.add(hairMesh);
+
+      hairFrontMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({
+          transparent: true,
+          depthWrite: false,
+          depthTest: true,
+          side: THREE.DoubleSide,
+          opacity: 1,
+          toneMapped: true
+        })
+      );
+      hairFrontMesh.visible = false;
+      hairFrontMesh.renderOrder = 3;
+      hairFrontMesh.rotation.order = 'XYZ';
+      scene.add(hairFrontMesh);
 
       hairModelMount = new THREE.Group();
       hairModelMount.visible = false;
@@ -189,6 +249,7 @@
       material.roughness = Math.max(0.58, material.roughness ?? 0.72);
       material.side = THREE.DoubleSide;
       material.alphaTest = activeModelProfile?.alphaTest ?? 0.06;
+      material.alphaToCoverage = true;
       material.transparent = true;
       material.depthTest = true;
       material.depthWrite = true;
@@ -253,7 +314,7 @@
     }
   }
 
-  function setHair(sourceCanvas, style, color) {
+  function setHair(sourceCanvas, style, color, foregroundCanvas = null) {
     if (!renderer || !sourceCanvas || !style) return;
     hairTexture?.dispose();
     hairTexture = new THREE.CanvasTexture(sourceCanvas);
@@ -262,6 +323,17 @@
     hairTexture.needsUpdate = true;
     hairMesh.material.map = hairTexture;
     hairMesh.material.needsUpdate = true;
+    hairFrontTexture?.dispose();
+    hairFrontTexture = null;
+    hairFrontMesh.material.map = null;
+    if (foregroundCanvas) {
+      hairFrontTexture = new THREE.CanvasTexture(foregroundCanvas);
+      hairFrontTexture.colorSpace = THREE.SRGBColorSpace;
+      hairFrontTexture.flipY = false;
+      hairFrontTexture.needsUpdate = true;
+      hairFrontMesh.material.map = hairFrontTexture;
+    }
+    hairFrontMesh.material.needsUpdate = true;
     styleProfile = {
       id: style.id,
       faceOpeningRatio: style.faceOpeningRatio,
@@ -269,8 +341,10 @@
       faceCenterYRatio: style.faceCenterYRatio,
       faceOffsetXRatio: style.faceOffsetXRatio || 0,
       aspect: sourceCanvas.height / sourceCanvas.width,
-      model3d: style.model3d || null
+      model3d: style.model3d || null,
+      layered2d: Boolean(foregroundCanvas)
     };
+    trackedHairVisible = false;
     const version = ++modelLoadVersion;
     hairModelMount.visible = false;
     faceOccluder.visible = false;
@@ -286,8 +360,10 @@
     enabled = value;
     if (!value && hairMesh) {
       hairMesh.visible = false;
+      hairFrontMesh.visible = false;
       hairModelMount.visible = false;
       faceOccluder.visible = false;
+      trackedHairVisible = false;
     }
     if (!value && renderer) renderer.clear();
   }
@@ -312,16 +388,40 @@
     };
   }
 
+  function averageMirroredPoint(landmarks, indices, width, height) {
+    const total = indices.reduce((sum, index) => {
+      const point = mirroredPoint(landmarks[index], width, height);
+      sum.x += point.x;
+      sum.y += point.y;
+      sum.z += point.z;
+      return sum;
+    }, { x: 0, y: 0, z: 0 });
+    return {
+      x: total.x / indices.length,
+      y: total.y / indices.length,
+      z: total.z / indices.length
+    };
+  }
+
   function processLandmarks(landmarks, width, height, controls, facialMatrix) {
     const templeA = mirroredPoint(landmarks[234], width, height);
     const templeB = mirroredPoint(landmarks[454], width, height);
     const left = templeA.x < templeB.x ? templeA : templeB;
     const right = templeA.x < templeB.x ? templeB : templeA;
-    const nose = mirroredPoint(landmarks[1], width, height);
+    const sideA = averageMirroredPoint(landmarks, [234, 127, 162], width, height);
+    const sideB = averageMirroredPoint(landmarks, [454, 356, 389], width, height);
+    const eyeA = mirroredPoint(landmarks[33], width, height);
+    const eyeB = mirroredPoint(landmarks[263], width, height);
+    const eyeLeft = eyeA.x < eyeB.x ? eyeA : eyeB;
+    const eyeRight = eyeA.x < eyeB.x ? eyeB : eyeA;
+    const nose = averageMirroredPoint(landmarks, [1, 4, 5], width, height);
     const forehead = mirroredPoint(landmarks[10], width, height);
     const chin = mirroredPoint(landmarks[152], width, height);
     const faceWidth = Math.hypot(right.x - left.x, right.y - left.y) * 1.05;
-    const faceCenterX = (left.x + right.x) / 2;
+    const templeCenterX = (left.x + right.x) / 2;
+    const sideCenterX = (sideA.x + sideB.x) / 2;
+    const eyeCenterX = (eyeLeft.x + eyeRight.x) / 2;
+    const faceCenterX = templeCenterX * 0.58 + sideCenterX * 0.27 + eyeCenterX * 0.15;
     const faceCenterY = (forehead.y + chin.y) / 2;
     const scale = controls.scale / 100;
     const drawWidth = faceWidth / styleProfile.faceOpeningRatio * scale;
@@ -329,7 +429,9 @@
     const drawHeight = styleProfile.faceOpeningHeightRatio
       ? verticalSpan / styleProfile.faceOpeningHeightRatio * scale
       : drawWidth * styleProfile.aspect;
-    const roll = Math.atan2(right.y - left.y, right.x - left.x);
+    const templeRoll = Math.atan2(right.y - left.y, right.x - left.x);
+    const eyeRoll = Math.atan2(eyeRight.y - eyeLeft.y, eyeRight.x - eyeLeft.x);
+    const roll = templeRoll * 0.72 + eyeRoll * 0.28;
     let yaw = Math.max(-0.48, Math.min(0.48, (nose.x - faceCenterX) / faceWidth * 1.65));
     let pitch = Math.max(-0.28, Math.min(0.28, ((nose.y - forehead.y) / verticalSpan - 0.53) * 1.3));
 
@@ -348,8 +450,12 @@
       }
     }
 
-    target.x = faceCenterX + faceWidth * styleProfile.faceOffsetXRatio + controls.x;
-    target.y = faceCenterY + drawHeight * (0.5 - styleProfile.faceCenterYRatio) + controls.y;
+    target.x = faceCenterX
+      + (styleProfile.model3d ? 0 : faceWidth * styleProfile.faceOffsetXRatio)
+      + controls.x;
+    target.y = styleProfile.model3d
+      ? faceCenterY + controls.y
+      : faceCenterY + drawHeight * (0.5 - styleProfile.faceCenterYRatio) + controls.y;
     target.width = drawWidth;
     target.height = drawHeight;
     target.roll = roll + controls.rotation * Math.PI / 180;
@@ -357,6 +463,9 @@
     target.pitch = pitch * controls.depth;
     target.faceWidth = faceWidth;
     target.faceHeight = verticalSpan;
+    target.faceCenterX = faceCenterX;
+    target.faceCenterY = faceCenterY;
+    target.foreheadY = forehead.y;
     target.modelScale = styleProfile.model3d
       ? faceWidth / styleProfile.model3d.canonicalFaceWidth * scale
       : 1;
@@ -368,6 +477,11 @@
     return value + (next - value) * amount;
   }
 
+  function smoothAngle(value, next, amount) {
+    const difference = Math.atan2(Math.sin(next - value), Math.cos(next - value));
+    return value + difference * amount;
+  }
+
   function renderTrackedHair(now, controls, showOverlay) {
     const faceIsFresh = now - lastFaceAt < 420;
     const shouldShow = Boolean(enabled && styleProfile && showOverlay && faceIsFresh);
@@ -377,21 +491,36 @@
       activeModelProfile &&
       activeModelStyleId === styleProfile.id
     );
+    const useLayered2d = Boolean(shouldShow && !useTrue3d && styleProfile.layered2d && hairFrontTexture);
     hairMesh.visible = shouldShow && !useTrue3d;
+    hairFrontMesh.visible = useLayered2d;
     hairModelMount.visible = useTrue3d;
-    faceOccluder.visible = useTrue3d;
+    faceOccluder.visible = useTrue3d || useLayered2d;
 
     if (shouldShow) {
-      current.x = smoothValue(current.x, target.x, 0.28);
-      current.y = smoothValue(current.y, target.y, 0.28);
-      current.width = smoothValue(current.width, target.width, 0.24);
-      current.height = smoothValue(current.height, target.height, 0.24);
-      current.roll = smoothValue(current.roll, target.roll, 0.24);
-      current.yaw = smoothValue(current.yaw, target.yaw, 0.20);
-      current.pitch = smoothValue(current.pitch, target.pitch, 0.20);
-      current.modelScale = smoothValue(current.modelScale, target.modelScale, 0.24);
-      current.faceWidth = smoothValue(current.faceWidth, target.faceWidth, 0.24);
-      current.faceHeight = smoothValue(current.faceHeight, target.faceHeight, 0.24);
+      if (!trackedHairVisible) {
+        for (const key of Object.keys(current)) current[key] = target[key];
+        current.opacity = 0;
+      }
+      const travel = Math.hypot(target.x - current.x, target.y - current.y);
+      const relativeTravel = travel / Math.max(1, target.faceWidth);
+      const positionAmount = Math.max(0.24, Math.min(0.52, 0.24 + relativeTravel * 0.72));
+      const scaleAmount = Math.max(0.22, Math.min(0.44,
+        0.22 + Math.abs(target.width - current.width) / Math.max(1, target.width) * 0.7
+      ));
+      current.x = smoothValue(current.x, target.x, positionAmount);
+      current.y = smoothValue(current.y, target.y, positionAmount);
+      current.width = smoothValue(current.width, target.width, scaleAmount);
+      current.height = smoothValue(current.height, target.height, scaleAmount);
+      current.roll = smoothAngle(current.roll, target.roll, 0.26);
+      current.yaw = smoothAngle(current.yaw, target.yaw, 0.22);
+      current.pitch = smoothAngle(current.pitch, target.pitch, 0.22);
+      current.modelScale = smoothValue(current.modelScale, target.modelScale, scaleAmount);
+      current.faceWidth = smoothValue(current.faceWidth, target.faceWidth, scaleAmount);
+      current.faceHeight = smoothValue(current.faceHeight, target.faceHeight, scaleAmount);
+      current.faceCenterX = smoothValue(current.faceCenterX, target.faceCenterX, positionAmount);
+      current.faceCenterY = smoothValue(current.faceCenterY, target.faceCenterY, positionAmount);
+      current.foreheadY = smoothValue(current.foreheadY, target.foreheadY, positionAmount);
       current.opacity = smoothValue(current.opacity, target.opacity, 0.25);
 
       if (useTrue3d) {
@@ -425,9 +554,64 @@
         hairMesh.scale.set(current.width, current.height, 1);
         hairMesh.rotation.set(current.pitch, current.yaw, current.roll);
         hairMesh.material.opacity = current.opacity;
+        if (useLayered2d) {
+          hairFrontMesh.position.set(current.x, current.y, 2);
+          hairFrontMesh.scale.set(current.width, current.height, 1);
+          hairFrontMesh.rotation.set(current.pitch, current.yaw, current.roll);
+          hairFrontMesh.material.opacity = current.opacity;
+          faceOccluder.position.set(
+            current.faceCenterX,
+            current.faceCenterY + current.faceHeight * 0.025,
+            1
+          );
+          faceOccluder.scale.set(
+            current.faceWidth * 0.91,
+            current.faceHeight * 1.01,
+            1
+          );
+          faceOccluder.rotation.set(-current.pitch, current.yaw, current.roll);
+        }
       }
     }
+    trackedHairVisible = shouldShow;
     renderer.render(scene, camera);
+  }
+
+  async function segmentHair(imageSource) {
+    if (!imageSource?.naturalWidth && !imageSource?.width) {
+      throw new Error('A decoded image is required for hair segmentation');
+    }
+    if (!initializationPromise) {
+      throw new Error('Live AR must be initialized before hair segmentation');
+    }
+    await initializationPromise;
+    const segmenter = await getHairSegmenter();
+    return new Promise((resolve, reject) => {
+      try {
+        segmenter.segment(imageSource, (result) => {
+          try {
+            const masks = result.confidenceMasks || [];
+            const labels = segmenter.getLabels?.() || [];
+            const labelIndex = labels.findIndex((label) => label.toLowerCase() === 'hair');
+            const hairIndex = labelIndex >= 0 ? labelIndex : (masks.length > 1 ? 1 : 0);
+            const mask = masks[hairIndex] || masks[masks.length - 1];
+            if (!mask) throw new Error('Hair segmentation returned no confidence mask');
+            const values = mask.getAsFloat32Array();
+            resolve({
+              width: mask.width,
+              height: mask.height,
+              data: Float32Array.from(values)
+            });
+          } catch (error) {
+            reject(error);
+          } finally {
+            result.close?.();
+          }
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
   function update(now, controls, showOverlay) {
@@ -526,7 +710,12 @@
         height: current.height,
         roll: current.roll,
         yaw: current.yaw,
-        pitch: current.pitch
+        pitch: current.pitch,
+        faceWidth: current.faceWidth,
+        faceHeight: current.faceHeight,
+        faceCenterX: current.faceCenterX,
+        faceCenterY: current.faceCenterY,
+        foreheadY: current.foreheadY
       }
     };
   }
@@ -535,8 +724,11 @@
     setEnabled(false);
     clearActiveModel();
     hairTexture?.dispose();
+    hairFrontTexture?.dispose();
     hairMesh?.geometry.dispose();
     hairMesh?.material.dispose();
+    hairFrontMesh?.geometry.dispose();
+    hairFrontMesh?.material.dispose();
     faceOccluder?.geometry.dispose();
     faceOccluder?.material.dispose();
     for (const promise of modelCache.values()) {
@@ -554,9 +746,19 @@
       }).catch(() => {});
     }
     modelCache.clear();
+    hairSegmenter?.close();
     renderer?.dispose();
     landmarker?.close();
   }
 
-  window.MirrorlyAR = { initialize, setHair, setEnabled, update, measureImage, getStatus, dispose };
+  window.MirrorlyAR = {
+    initialize,
+    setHair,
+    setEnabled,
+    update,
+    measureImage,
+    segmentHair,
+    getStatus,
+    dispose
+  };
 })();

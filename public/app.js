@@ -16,6 +16,14 @@ const toast = document.querySelector("#toast");
 const trackingHint = cameraStatus;
 // Fit is automatic in the customer-facing UI. Keep stable renderer defaults
 // internally so the MediaPipe measurement remains the single alignment source.
+const liveAiHairButton = document.createElement('button');
+liveAiHairButton.id = 'liveAiHairButton';
+liveAiHairButton.className = 'glass-button live-ai-hair-button';
+liveAiHairButton.type = 'button';
+liveAiHairButton.disabled = true;
+liveAiHairButton.textContent = 'AI hair to live AR';
+captureFaceButton.before(liveAiHairButton);
+
 const controls = {
   x: { value: 0 },
   y: { value: 0 },
@@ -47,7 +55,7 @@ const hairstyles = [
       license: "CC0 / MakeHuman Community",
       anchor: [0, 6.78, 0.22],
       canonicalFaceWidth: 1.52,
-      yOffsetRatio: -0.03,
+      yOffsetRatio: -0.10,
       occluderDepth: 0.66,
       occluderWidthRatio: 0.80,
       occluderHeightRatio: 1.03,
@@ -261,6 +269,8 @@ const hairstyles = [
   }
 ];
 
+const pngPreferredLiveStyles = new Set(['feather', 'v-cut', 'u-cut']);
+
 const state = {
   active: false,
   demo: false,
@@ -280,8 +290,31 @@ const state = {
   aiRendering: false,
   aiResult: null,
   aiRefreshPending: false,
-  holdCapturedFrame: false
+  holdCapturedFrame: false,
+  liveAiHair: null,
+  liveAiHairKey: '',
+  liveAiHairGenerating: false
 };
+
+function currentLookKey() {
+  return state.style.id + ':' + state.color.name;
+}
+
+function usesTrue3dLive(style) {
+  return Boolean(style.model3d && !pngPreferredLiveStyles.has(style.id));
+}
+
+function updateLiveAiHairButton() {
+  const active = Boolean(state.liveAiHair && state.liveAiHairKey === currentLookKey());
+  liveAiHairButton.disabled = !state.liveAr || !state.aiAvailable || state.liveAiHairGenerating;
+  liveAiHairButton.classList.toggle('active', active);
+  liveAiHairButton.textContent = state.liveAiHairGenerating
+    ? 'Creating AI hair...'
+    : (active ? 'AI hair active - regenerate' : 'AI hair to live AR');
+  liveAiHairButton.title = state.aiAvailable
+    ? 'Capture one frame, merge the hairstyle into the portrait, then track the hair change live with AR'
+    : 'Configure OpenAI API access to generate a live AR hairstyle';
+}
 
 let automaticAiTimer;
 
@@ -320,6 +353,7 @@ async function checkAiAvailability() {
     state.aiAvailable = false;
   }
   updateAiButton();
+  updateLiveAiHairButton();
 }
 
 const hairImages = new Map();
@@ -491,9 +525,448 @@ async function startCamera() {
 
 function syncArHair() {
   if (!state.arReady || !window.MirrorlyAR) return;
-  const hair = getTintedHair(state.style, state.color);
-  if (hair) window.MirrorlyAR.setHair(hair, state.style, state.color);
+  const useGeneratedHair = state.liveAiHair && state.liveAiHairKey === currentLookKey();
+  const hair = useGeneratedHair
+    ? state.liveAiHair.source
+    : getTintedHair(state.style, state.color);
+  const arStyle = useGeneratedHair
+    ? state.liveAiHair.profile
+    : (usesTrue3dLive(state.style) ? state.style : { ...state.style, model3d: null });
+  if (hair) {
+    window.MirrorlyAR.setHair(
+      hair,
+      arStyle,
+      state.color,
+      useGeneratedHair ? state.liveAiHair.foregroundSource : null
+    );
+  }
+  updateLiveAiHairButton();
 }
+
+function captureLivePortrait() {
+  const portrait = document.createElement('canvas');
+  portrait.width = video.videoWidth;
+  portrait.height = video.videoHeight;
+  const portraitContext = portrait.getContext('2d');
+  portraitContext.translate(portrait.width, 0);
+  portraitContext.scale(-1, 1);
+  portraitContext.drawImage(video, 0, 0, portrait.width, portrait.height);
+  return portrait;
+}
+
+function clampNumber(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function buildLiveAiHairLayer(image, capture) {
+  const fullLayer = document.createElement('canvas');
+  fullLayer.width = image.naturalWidth;
+  fullLayer.height = image.naturalHeight;
+  const fullContext = fullLayer.getContext('2d', { willReadFrequently: true });
+  fullContext.drawImage(image, 0, 0);
+  const pixels = fullContext.getImageData(0, 0, fullLayer.width, fullLayer.height);
+  let minX = fullLayer.width;
+  let minY = fullLayer.height;
+  let maxX = -1;
+  let maxY = -1;
+  let transparentPixels = 0;
+
+  for (let pixel = 0; pixel < pixels.data.length; pixel += 4) {
+    const alpha = pixels.data[pixel + 3];
+    const index = pixel / 4;
+    if (alpha < 8) transparentPixels += 1;
+    if (alpha < 12) continue;
+    const x = index % fullLayer.width;
+    const y = Math.floor(index / fullLayer.width);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+
+  const pixelCount = fullLayer.width * fullLayer.height;
+  if (maxX < minX || maxY < minY) throw new Error('AI returned an empty hairstyle layer');
+  if (transparentPixels / pixelCount < 0.12) {
+    throw new Error('AI returned a portrait instead of a transparent hairstyle layer');
+  }
+
+  const margin = Math.max(8, Math.round(Math.max(fullLayer.width, fullLayer.height) * 0.012));
+  minX = Math.max(0, minX - margin);
+  minY = Math.max(0, minY - margin);
+  maxX = Math.min(fullLayer.width - 1, maxX + margin);
+  maxY = Math.min(fullLayer.height - 1, maxY + margin);
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const cropped = document.createElement('canvas');
+  cropped.width = cropWidth;
+  cropped.height = cropHeight;
+  cropped.getContext('2d').drawImage(
+    fullLayer,
+    minX,
+    minY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight
+  );
+
+  const scaleX = fullLayer.width / capture.width;
+  const scaleY = fullLayer.height / capture.height;
+  const faceWidth = capture.pose.faceWidth * scaleX;
+  const faceHeight = capture.pose.faceHeight * scaleY;
+  const faceCenterX = capture.pose.faceCenterX * scaleX;
+  const faceCenterY = capture.pose.faceCenterY * scaleY;
+  const cropCenterX = minX + cropWidth / 2;
+  const cropCenterY = minY + cropHeight / 2;
+  const profile = {
+    ...state.style,
+    id: state.style.id + '-ai-live',
+    model3d: null,
+    faceOpeningRatio: clampNumber(faceWidth / cropWidth, 0.12, 1.2),
+    faceOpeningHeightRatio: clampNumber(faceHeight / cropHeight, 0.12, 1.2),
+    faceOffsetXRatio: clampNumber((cropCenterX - faceCenterX) / faceWidth, -1, 1),
+    faceCenterYRatio: clampNumber(0.5 - (cropCenterY - faceCenterY) / cropHeight, 0.05, 0.95)
+  };
+  return { source: cropped, profile };
+}
+
+function smoothStep(minimum, maximum, value) {
+  const normalized = clampNumber((value - minimum) / Math.max(0.0001, maximum - minimum), 0, 1);
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
+function createHairConfidenceCanvas(hairMask, width, height) {
+  if (!hairMask?.data || !hairMask.width || !hairMask.height) return null;
+  if (hairMask.data.length < hairMask.width * hairMask.height) return null;
+
+  const maskSource = document.createElement('canvas');
+  maskSource.width = hairMask.width;
+  maskSource.height = hairMask.height;
+  const maskSourceContext = maskSource.getContext('2d');
+  const maskPixels = maskSourceContext.createImageData(maskSource.width, maskSource.height);
+  for (let index = 0; index < hairMask.width * hairMask.height; index += 1) {
+    const confidence = clampNumber(hairMask.data[index], 0, 1);
+    const pixel = index * 4;
+    maskPixels.data[pixel] = 255;
+    maskPixels.data[pixel + 1] = 255;
+    maskPixels.data[pixel + 2] = 255;
+    maskPixels.data[pixel + 3] = Math.round(confidence * 255);
+  }
+  maskSourceContext.putImageData(maskPixels, 0, 0);
+
+  const scaledMask = document.createElement('canvas');
+  scaledMask.width = width;
+  scaledMask.height = height;
+  const scaledContext = scaledMask.getContext('2d', { willReadFrequently: true });
+  scaledContext.imageSmoothingEnabled = true;
+  scaledContext.imageSmoothingQuality = 'high';
+  scaledContext.drawImage(maskSource, 0, 0, width, height);
+  return scaledMask;
+}
+
+function drawLiveAiStyleMask(maskContext, capture, width, height) {
+  const scaleX = width / capture.width;
+  const scaleY = height / capture.height;
+  const faceWidth = capture.pose.faceWidth * scaleX;
+  const [, , viewWidth, viewHeight] = state.style.viewBox.split(' ').map(Number);
+  const maskWidth = capture.pose.width * scaleX;
+  const maskHeight = capture.pose.height * scaleY;
+  const modelPlacement = usesTrue3dLive(state.style);
+  const maskCenterX = capture.pose.x * scaleX
+    + (modelPlacement ? faceWidth * (state.style.faceOffsetXRatio || 0) : 0);
+  const maskCenterY = capture.pose.y * scaleY
+    + (modelPlacement ? maskHeight * (0.5 - (state.style.faceCenterYRatio ?? 0.5)) : 0);
+
+  maskContext.save();
+  maskContext.translate(maskCenterX, maskCenterY);
+  maskContext.rotate(capture.pose.roll || 0);
+  maskContext.scale(maskWidth / viewWidth, maskHeight / viewHeight);
+  maskContext.translate(-viewWidth / 2, -viewHeight / 2);
+  maskContext.fill(new Path2D(state.style.path), 'evenodd');
+  maskContext.restore();
+}
+
+function createLiveAiEditMask(capture) {
+  const editMask = document.createElement('canvas');
+  editMask.width = capture.width;
+  editMask.height = capture.height;
+  const editMaskContext = editMask.getContext('2d');
+  editMaskContext.fillStyle = '#fff';
+  editMaskContext.fillRect(0, 0, editMask.width, editMask.height);
+  editMaskContext.globalCompositeOperation = 'destination-out';
+  drawLiveAiStyleMask(editMaskContext, capture, editMask.width, editMask.height);
+  editMaskContext.globalCompositeOperation = 'source-over';
+  return editMask;
+}
+
+function buildLiveAiMergedLayer(image, capture, hairMask = null) {
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+  const aiCanvas = document.createElement('canvas');
+  aiCanvas.width = width;
+  aiCanvas.height = height;
+  const aiContext = aiCanvas.getContext('2d', { willReadFrequently: true });
+  aiContext.drawImage(image, 0, 0);
+
+  const originalCanvas = document.createElement('canvas');
+  originalCanvas.width = width;
+  originalCanvas.height = height;
+  const originalContext = originalCanvas.getContext('2d', { willReadFrequently: true });
+  originalContext.drawImage(capture.portrait, 0, 0, width, height);
+  const aiPixels = aiContext.getImageData(0, 0, width, height);
+  const originalPixels = originalContext.getImageData(0, 0, width, height);
+  const patchPixels = aiContext.createImageData(width, height);
+  const semanticCanvas = createHairConfidenceCanvas(hairMask, width, height);
+  const semanticPixels = semanticCanvas
+    ? semanticCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height)
+    : null;
+
+  const scaleX = width / capture.width;
+  const scaleY = height / capture.height;
+  const faceWidth = capture.pose.faceWidth * scaleX;
+  const faceHeight = capture.pose.faceHeight * scaleY;
+  const faceCenterX = capture.pose.faceCenterX * scaleX;
+  const faceCenterY = capture.pose.faceCenterY * scaleY;
+  const guideCoreCanvas = document.createElement('canvas');
+  guideCoreCanvas.width = width;
+  guideCoreCanvas.height = height;
+  const guideCoreContext = guideCoreCanvas.getContext('2d', { willReadFrequently: true });
+  guideCoreContext.fillStyle = '#fff';
+  drawLiveAiStyleMask(guideCoreContext, capture, width, height);
+  const guideCorePixels = guideCoreContext.getImageData(0, 0, width, height);
+  const guideCanvas = document.createElement('canvas');
+  guideCanvas.width = width;
+  guideCanvas.height = height;
+  const guideContext = guideCanvas.getContext('2d', { willReadFrequently: true });
+  guideContext.drawImage(guideCoreCanvas, 0, 0);
+  guideContext.save();
+  guideContext.globalAlpha = 0.46;
+  guideContext.filter = 'blur(' + Math.max(2, faceWidth * 0.028) + 'px)';
+  guideContext.drawImage(guideCoreCanvas, 0, 0);
+  guideContext.restore();
+  const guidePixels = guideContext.getImageData(0, 0, width, height);
+  const regionCenterY = faceCenterY + faceHeight * 0.18;
+  const regionRadiusX = faceWidth * 1.38;
+  const regionRadiusY = faceHeight * 1.48;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  const startX = Math.max(0, Math.floor(faceCenterX - regionRadiusX * 1.08));
+  const endX = Math.min(width - 1, Math.ceil(faceCenterX + regionRadiusX * 1.08));
+  const startY = Math.max(0, Math.floor(regionCenterY - regionRadiusY * 1.08));
+  const endY = Math.min(height - 1, Math.ceil(regionCenterY + regionRadiusY * 1.08));
+  for (let y = startY; y <= endY; y += 1) {
+    for (let x = startX; x <= endX; x += 1) {
+      const pixel = (y * width + x) * 4;
+      const coreAlpha = guideCorePixels.data[pixel + 3] / 255;
+      const guideAlpha = guidePixels.data[pixel + 3] / 255;
+      if (guideAlpha < 0.015) continue;
+      const hairConfidence = semanticPixels ? semanticPixels.data[pixel + 3] / 255 : 1;
+      if (semanticPixels && hairConfidence < 0.035) continue;
+      const redDifference = Math.abs(aiPixels.data[pixel] - originalPixels.data[pixel]);
+      const greenDifference = Math.abs(aiPixels.data[pixel + 1] - originalPixels.data[pixel + 1]);
+      const blueDifference = Math.abs(aiPixels.data[pixel + 2] - originalPixels.data[pixel + 2]);
+      const difference = Math.max(redDifference, greenDifference, blueDifference);
+      if (difference < 3) continue;
+      const regionDistance = Math.sqrt(
+        Math.pow((x - faceCenterX) / regionRadiusX, 2)
+        + Math.pow((y - regionCenterY) / regionRadiusY, 2)
+      );
+      const regionAlpha = 1 - smoothStep(0.82, 1.05, regionDistance);
+      if (regionAlpha <= 0) continue;
+
+      const expandedAlpha = smoothStep(0.02, 0.48, guideAlpha);
+      const differenceAlpha = smoothStep(2, semanticPixels ? 17 : 22, difference);
+      const semanticAlpha = semanticPixels ? smoothStep(0.06, 0.66, hairConfidence) : 1;
+      const silhouetteAlpha = Math.max(coreAlpha, expandedAlpha) * semanticAlpha * differenceAlpha;
+      const alpha = Math.round(
+        255 * regionAlpha * silhouetteAlpha
+      );
+      if (alpha < 5) continue;
+
+      patchPixels.data[pixel] = aiPixels.data[pixel];
+      patchPixels.data[pixel + 1] = aiPixels.data[pixel + 1];
+      patchPixels.data[pixel + 2] = aiPixels.data[pixel + 2];
+      patchPixels.data[pixel + 3] = alpha;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    throw new Error('AI merge did not contain a usable hairstyle change');
+  }
+
+  const rawPatch = document.createElement('canvas');
+  rawPatch.width = width;
+  rawPatch.height = height;
+  rawPatch.getContext('2d').putImageData(patchPixels, 0, 0);
+
+  const foregroundPatch = document.createElement('canvas');
+  foregroundPatch.width = width;
+  foregroundPatch.height = height;
+  const foregroundContext = foregroundPatch.getContext('2d');
+  foregroundContext.drawImage(rawPatch, 0, 0);
+  foregroundContext.globalCompositeOperation = 'destination-in';
+  foregroundContext.fillStyle = '#fff';
+  foregroundContext.save();
+  foregroundContext.translate(faceCenterX, faceCenterY);
+  foregroundContext.rotate(capture.pose.roll || 0);
+  foregroundContext.beginPath();
+  foregroundContext.ellipse(
+    0,
+    faceHeight * 0.025,
+    faceWidth * 0.455,
+    faceHeight * 0.505,
+    0,
+    0,
+    Math.PI * 2
+  );
+  foregroundContext.fill();
+  foregroundContext.restore();
+  foregroundContext.globalCompositeOperation = 'source-over';
+
+  const margin = Math.max(8, Math.round(Math.max(width, height) * 0.012));
+  minX = Math.max(0, minX - margin);
+  minY = Math.max(0, minY - margin);
+  maxX = Math.min(width - 1, maxX + margin);
+  maxY = Math.min(height - 1, maxY + margin);
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const cropped = document.createElement('canvas');
+  cropped.width = cropWidth;
+  cropped.height = cropHeight;
+  cropped.getContext('2d').drawImage(
+    rawPatch,
+    minX,
+    minY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight
+  );
+  const foregroundCropped = document.createElement('canvas');
+  foregroundCropped.width = cropWidth;
+  foregroundCropped.height = cropHeight;
+  foregroundCropped.getContext('2d').drawImage(
+    foregroundPatch,
+    minX,
+    minY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight
+  );
+
+  const cropCenterX = minX + cropWidth / 2;
+  const cropCenterY = minY + cropHeight / 2;
+  const profile = {
+    ...state.style,
+    id: state.style.id + '-ai-live',
+    model3d: null,
+    faceOpeningRatio: clampNumber(faceWidth / cropWidth, 0.12, 1.2),
+    faceOpeningHeightRatio: clampNumber(faceHeight / cropHeight, 0.12, 1.2),
+    faceOffsetXRatio: clampNumber((cropCenterX - faceCenterX) / faceWidth, -1, 1),
+    faceCenterYRatio: clampNumber(0.5 - (cropCenterY - faceCenterY) / cropHeight, 0.05, 0.95)
+  };
+  return {
+    source: cropped,
+    foregroundSource: foregroundCropped,
+    profile,
+    semanticMask: Boolean(semanticPixels)
+  };
+}
+
+async function createLiveAiHair() {
+  if (!state.liveAr || video.readyState < 2) {
+    showToast('Start the live AR camera first');
+    return;
+  }
+  if (!state.aiAvailable) {
+    showToast('OpenAI API access is required for AI hair generation');
+    return;
+  }
+  const arStatus = window.MirrorlyAR?.getStatus();
+  if (!arStatus?.tracking || !arStatus.pose?.faceWidth) {
+    showToast('Hold your face in view, then try again');
+    return;
+  }
+
+  const requestedLook = currentLookKey();
+  const portrait = captureLivePortrait();
+  const capture = {
+    width: portrait.width,
+    height: portrait.height,
+    portrait,
+    pose: { ...arStatus.pose }
+  };
+  const editMask = createLiveAiEditMask(capture);
+  state.liveAiHairGenerating = true;
+  updateLiveAiHairButton();
+  privacyStatus.textContent = 'Uploading one frame to create a live AR hairstyle';
+  trackingHint.textContent = 'AI is merging the hairstyle with the captured live portrait';
+
+  try {
+    const response = await fetch('/api/ai-ar-hair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        portrait: portrait.toDataURL('image/png'),
+        editMask: editMask.toDataURL('image/png'),
+        arPreview: canvas.toDataURL('image/png'),
+        styleReference: createStyleReferenceDataUrl(),
+        styleId: state.style.id,
+        colorName: state.color.name
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Live AI hair generation failed');
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = result.image;
+    await image.decode();
+    if (requestedLook !== currentLookKey()) {
+      showToast('Style changed; generate AI hair again for this look');
+      return;
+    }
+    trackingHint.textContent = 'AI merge ready - separating hairstyle pixels locally';
+    let hairMask = null;
+    try {
+      hairMask = await window.MirrorlyAR.segmentHair(image);
+    } catch (error) {
+      console.warn('Mirrorly local hair segmentation unavailable; using fitted fallback mask', error);
+    }
+    state.liveAiHair = buildLiveAiMergedLayer(image, capture, hairMask);
+    state.liveAiHairKey = requestedLook;
+    syncArHair();
+    privacyStatus.textContent = 'AI hair created; live tracking is local';
+    trackingHint.textContent = state.liveAiHair.semanticMask
+      ? 'Hair-only AI layer is following your live pose'
+      : 'AI-generated hairstyle is following with the fitted fallback mask';
+    showToast('AI hairstyle is now active in live AR');
+  } catch (error) {
+    console.error('Mirrorly live AI hair failed', error);
+    privacyStatus.textContent = 'Live tracking stays local; AI hair was not created';
+    trackingHint.textContent = 'Live AR fallback remains active';
+    showToast(error.message || 'Live AI hair generation failed');
+  } finally {
+    state.liveAiHairGenerating = false;
+    updateLiveAiHairButton();
+  }
+}
+
+liveAiHairButton.addEventListener('click', createLiveAiHair);
 
 async function measureCapturedFace(capturedFrame) {
   state.arLoading = true;
@@ -536,6 +1009,7 @@ function stopLiveAr(showMessage = true) {
   cameraStatus.textContent = "Camera active";
   trackingHint.textContent = "Live AI AR paused";
   updateSelectedLook();
+  updateLiveAiHairButton();
   if (showMessage) showToast("Live AI AR paused");
 }
 
@@ -560,8 +1034,11 @@ async function startLiveAr({ automatic = false } = {}) {
     state.arReady = true;
     syncArHair();
     state.liveAr = true;
+    updateLiveAiHairButton();
     window.MirrorlyAR.setEnabled(true);
-    arCanvas.hidden = false;
+    // Three.js renders off-screen; each frame is merged into previewCanvas so
+    // the camera, contact blend, hairstyle, and final lighting share one image.
+    arCanvas.hidden = true;
     liveArButton.disabled = false;
     liveArButton.classList.add("active");
     liveArButton.textContent = "Pause live AI AR";
@@ -1162,6 +1639,53 @@ function applyCinematicFinish(targetContext = context, targetCanvas = canvas) {
   targetContext.restore();
 }
 
+function drawLiveHairlineBlend(pose) {
+  if (!pose || !Number.isFinite(pose.faceWidth) || pose.faceWidth < 20) return;
+  if (!Number.isFinite(pose.foreheadY) || !Number.isFinite(pose.faceCenterX)) return;
+
+  const faceWidth = pose.faceWidth;
+  const faceHeight = Math.max(1, pose.faceHeight);
+  context.save();
+  context.translate(pose.faceCenterX, pose.foreheadY + faceHeight * 0.025);
+  context.rotate(pose.roll || 0);
+  context.filter = 'blur(' + Math.max(2, faceWidth * 0.018) + 'px)';
+  context.lineCap = 'round';
+  context.lineWidth = Math.max(4, faceWidth * 0.052);
+  const contactShade = context.createLinearGradient(0, -faceHeight * 0.06, 0, faceHeight * 0.12);
+  contactShade.addColorStop(0, 'rgba(28, 16, 15, 0)');
+  contactShade.addColorStop(0.48, 'rgba(28, 16, 15, .30)');
+  contactShade.addColorStop(1, 'rgba(28, 16, 15, 0)');
+  context.strokeStyle = contactShade;
+  context.beginPath();
+  context.ellipse(
+    0,
+    0,
+    faceWidth * 0.43,
+    faceHeight * 0.105,
+    0,
+    Math.PI * 1.04,
+    Math.PI * 1.96
+  );
+  context.stroke();
+  context.restore();
+}
+
+function compositeLiveAr(now) {
+  const arStatus = window.MirrorlyAR?.getStatus(now);
+  if (!state.showOverlay || !arStatus?.tracking) return;
+
+  const generatedHairIsActive = Boolean(
+    state.liveAiHair && state.liveAiHairKey === currentLookKey()
+  );
+  if (!generatedHairIsActive) drawLiveHairlineBlend(arStatus.pose);
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.globalAlpha = 1;
+  context.filter = 'none';
+  context.drawImage(arCanvas, 0, 0, canvas.width, canvas.height);
+  context.restore();
+}
+
 function drawAiResult() {
   if (!state.aiResult) return false;
   context.drawImage(state.aiResult, 0, 0, canvas.width, canvas.height);
@@ -1192,7 +1716,6 @@ function render(now = 0) {
     // Keep the untouched captured portrait visible while the hidden AR
     // placement guide is prepared and the final AI edit is processing.
   } else if (state.liveAr) {
-    applyCinematicFinish();
     window.MirrorlyAR?.update(now, {
       x: Number(controls.x.value),
       y: Number(controls.y.value),
@@ -1201,6 +1724,8 @@ function render(now = 0) {
       opacity: Number(controls.opacity.value) / 100,
       depth: Number(controls.depth.value) / 100
     }, state.showOverlay);
+    compositeLiveAr(now);
+    applyCinematicFinish();
   } else if (state.captured || state.demo) {
     drawPhotorealisticHair();
     applyCinematicFinish();
@@ -1377,6 +1902,20 @@ window.addEventListener("beforeunload", () => {
 });
 
 createStyleButtons();
+for (const [index, style] of hairstyles.entries()) {
+  if (usesTrue3dLive(style)) continue;
+  const styleButton = styleGrid.querySelectorAll('button')[index];
+  const badge = styleButton?.querySelector('.true-3d-badge');
+  if (badge) badge.textContent = 'LIVE AR';
+}
+window.addEventListener('mirrorly-ar-model', (event) => {
+  const detail = event.detail || {};
+  if (detail.status === 'png-fallback' && pngPreferredLiveStyles.has(detail.styleId)) {
+    trackingHint.textContent = 'Transparent hairstyle layer is following the live face';
+  } else if (detail.status === 'png-fallback' && detail.styleId.endsWith('-ai-live')) {
+    trackingHint.textContent = 'AI-generated hairstyle is following the live face';
+  }
+});
 createColorButtons();
 updateSelectedLook();
 checkAiAvailability();

@@ -43,6 +43,12 @@ const aiRenderSettings = Object.freeze({
   outputCompression: "90"
 });
 
+const aiArRenderSettings = Object.freeze({
+  model: 'gpt-image-2',
+  quality: 'medium',
+  outputFormat: 'png'
+});
+
 function sendJson(response, status, payload) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -140,7 +146,110 @@ async function renderAiHairstyle(request, response) {
   }
 }
 
+function readPngDimensions(buffer) {
+  const pngSignature = '89504e470d0a1a0a';
+  if (buffer.length < 24 || buffer.subarray(0, 8).toString('hex') !== pngSignature) {
+    throw new Error('Live portrait must be a valid PNG image');
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20)
+  };
+}
+
+function chooseAiArOutputSize(width, height) {
+  const minimumPixels = 655360;
+  let scale = Math.max(1, Math.sqrt(minimumPixels / Math.max(1, width * height)));
+  let outputWidth = Math.ceil(width * scale / 16) * 16;
+  let outputHeight = Math.ceil(height * scale / 16) * 16;
+  if (Math.max(outputWidth, outputHeight) > 3840) {
+    scale = 3840 / Math.max(outputWidth, outputHeight);
+    outputWidth = Math.floor(outputWidth * scale / 16) * 16;
+    outputHeight = Math.floor(outputHeight * scale / 16) * 16;
+  }
+  if (Math.max(outputWidth, outputHeight) / Math.min(outputWidth, outputHeight) > 3) {
+    throw new Error('Live portrait aspect ratio is not supported');
+  }
+  return outputWidth + 'x' + outputHeight;
+}
+
+async function renderLiveAiHairLayer(request, response) {
+  if (!process.env.OPENAI_API_KEY) {
+    sendJson(response, 503, {
+      error: 'Live AI hair generation requires OPENAI_API_KEY on this laptop.'
+    });
+    return;
+  }
+
+  try {
+    const body = await readJsonBody(request);
+    const hairstyle = hairstylePrompts[body.styleId];
+    if (!hairstyle || !hairColors.has(body.colorName)) {
+      sendJson(response, 400, { error: 'Unsupported hairstyle or hair color' });
+      return;
+    }
+
+    const portrait = decodePngDataUrl(body.portrait, 'Live portrait');
+    const editMask = decodePngDataUrl(body.editMask, 'Live hairstyle mask');
+    const arPreview = decodePngDataUrl(body.arPreview, 'AR placement preview');
+    const styleReference = decodePngDataUrl(body.styleReference, 'Style reference');
+    const portraitSize = readPngDimensions(portrait);
+    const maskSize = readPngDimensions(editMask);
+    if (maskSize.width !== portraitSize.width || maskSize.height !== portraitSize.height) {
+      throw new Error('Live hairstyle mask must match the portrait dimensions');
+    }
+    const outputSize = chooseAiArOutputSize(portraitSize.width, portraitSize.height);
+    const prompt = [
+      'The first image is the exact live portrait to edit. The second image is an AR placement guide. The third image is the hairstyle shape reference.',
+      'The transparent area of the supplied edit mask is the only region where hair may be changed.',
+      'Replace only the existing hair with ' + hairstyle + ' in ' + body.colorName + '.',
+      'Follow the placement guide for size, hairline, length, and position, but render the result photorealistically.',
+      'Preserve the exact identity, face, expression, skin, pose, body, clothes, room, lighting, camera noise, crop, and image dimensions from the first portrait.',
+      'Merge natural roots and fine strands into the scalp and temples. Remove the old hair wherever it conflicts with the selected style.',
+      'Do not leave a face-shaped hole, hard oval edge, halo, floating layer, black geometry, or pasted-wig appearance.',
+      'Return one complete edited portrait in the exact original coordinate system.'
+    ].join(' ');
+
+    const form = new FormData();
+    form.append('model', aiArRenderSettings.model);
+    form.append('mask', new Blob([editMask], { type: 'image/png' }), 'hairstyle-edit-mask.png');
+    form.append('image[]', new Blob([portrait], { type: 'image/png' }), 'live-portrait.png');
+    form.append('image[]', new Blob([arPreview], { type: 'image/png' }), 'ar-placement-preview.png');
+    form.append('image[]', new Blob([styleReference], { type: 'image/png' }), 'hairstyle-reference.png');
+    form.append('prompt', prompt);
+    form.append('quality', aiArRenderSettings.quality);
+    form.append('size', outputSize);
+    form.append('output_format', aiArRenderSettings.outputFormat);
+
+    const apiResponse = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + process.env.OPENAI_API_KEY },
+      body: form,
+      signal: AbortSignal.timeout(240000)
+    });
+    const result = await apiResponse.json();
+    if (!apiResponse.ok) {
+      throw new Error(result.error?.message || 'Live AI hair generation failed (' + apiResponse.status + ')');
+    }
+    const imageBase64 = result.data?.[0]?.b64_json;
+    if (!imageBase64) throw new Error('The image model returned no merged portrait');
+    sendJson(response, 200, {
+      image: 'data:image/png;base64,' + imageBase64,
+      sourceWidth: portraitSize.width,
+      sourceHeight: portraitSize.height,
+      outputSize
+    });
+  } catch (error) {
+    console.error('Mirrorly live AI hair failed:', error.message);
+    sendJson(response, 500, { error: error.message || 'Live AI hair generation failed' });
+  }
+}
+
 const server = http.createServer((request, response) => {
+  if (request.method === 'POST' && request.url.split('?')[0] === '/api/ai-ar-hair') {
+    renderLiveAiHairLayer(request, response);
+    return;
+  }
   const decodedPath = decodeURIComponent(request.url.split("?")[0]);
 
   if (request.method === "GET" && decodedPath === "/api/ai-status") {

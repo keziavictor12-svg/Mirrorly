@@ -260,7 +260,13 @@ h2 { font-size: 18px; }
   pointer-events: none;
 }
 .preview-toolbar button { pointer-events: auto; }
-.toolbar-group { display: flex; gap: 10px; }
+.toolbar-group { display: flex; flex-wrap: wrap; gap: 10px; }
+.live-ai-hair-button.active {
+  color: #172220;
+  border-color: rgba(120,216,173,.64);
+  background: linear-gradient(135deg, #b9ead3, #70bfb1);
+  box-shadow: 0 8px 24px rgba(76,169,160,.2);
+}
 .ar-button.active {
   color: #172220;
   border-color: rgba(120,216,173,.64);
