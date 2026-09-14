@@ -1,0 +1,10 @@
+MediaPipe canonical face measurements
+
+public/tracking.js includes a 15-landmark numeric subset of the canonical
+face model published by The MediaPipe Authors under Apache License 2.0.
+The subset has been adapted for Mirrorly's pose-projected fitting algorithm.
+tests/fixtures/mediapipe-canonical-points.json contains all 468 canonical
+vertices from that same model for synthetic contour/occlusion regressions.
+These are generic model coordinates, not captured customer face data.
+Source: https://github.com/google-ai-edge/mediapipe/blob/v0.10.21/mediapipe/modules/face_geometry/data/canonical_face_model.obj
+License: mediapipe-Apache-2.0.txt

@@ -1,6 +1,8 @@
 (function () {
   let THREE;
   let GLTFLoader;
+  let tracking;
+  let poseFilter;
   let FaceLandmarker;
   let ImageSegmenter;
   let FilesetResolver;
@@ -13,6 +15,7 @@
   let camera;
   let hairMesh;
   let hairFrontMesh;
+  let backgroundRepairMesh;
   let hairModelMount;
   let faceOccluder;
   let activeHairModel;
@@ -21,18 +24,26 @@
   let modelLoader;
   let hairTexture;
   let hairFrontTexture;
+  let backgroundRepairTexture;
   let outputCanvas;
   let videoElement;
   let initializationPromise;
   let enabled = false;
   let lastVideoTime = -1;
   let lastDetectionAt = 0;
-  let lastFaceAt = 0;
+  let lastFaceAt = null;
+  let rawFacePose = null;
+  let filteredFacePose = null;
+  let latestLandmarks = null;
+  let inferenceMs = 0;
+  let detectionIntervalMs = 1000 / 60;
+  let lastInferenceTimestamp = -1;
+  let detectionCount = 0;
+  let trackingStartedAt = null;
   let styleProfile = null;
   let landmarkerMode = "VIDEO";
   let measuringImage = false;
   let modelLoadVersion = 0;
-  let trackedHairVisible = false;
   const modelCache = new Map();
 
   const current = {
@@ -51,8 +62,6 @@
     foreheadY: 0,
     opacity: 0
   };
-
-  const target = { ...current };
 
   async function createLandmarker(vision) {
     const options = {
@@ -113,12 +122,15 @@
       const [visionModule, threeModule, gltfModule] = await Promise.all([
         import("./vendor/mediapipe/vision_bundle.mjs"),
         import("./vendor/three/three.module.min.js"),
-        import("./vendor/three/addons/loaders/GLTFLoader.js")
+        import("./vendor/three/addons/loaders/GLTFLoader.js"),
+        import("./tracking.js")
       ]);
       FaceLandmarker = visionModule.FaceLandmarker;
       ImageSegmenter = visionModule.ImageSegmenter;
       FilesetResolver = visionModule.FilesetResolver;
       THREE = threeModule;
+      tracking = window.MirrorlyTracking;
+      poseFilter = new tracking.PoseFilter();
       GLTFLoader = gltfModule.GLTFLoader;
       outputCanvas = canvas;
       videoElement = video;
@@ -165,6 +177,7 @@
         })
       );
       hairMesh.visible = false;
+      hairMesh.renderOrder = 1;
       hairMesh.rotation.order = "XYZ";
       scene.add(hairMesh);
 
@@ -184,13 +197,29 @@
       hairFrontMesh.rotation.order = 'XYZ';
       scene.add(hairFrontMesh);
 
+      backgroundRepairMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false,
+          depthTest: true, side: THREE.DoubleSide, toneMapped: false })
+      );
+      backgroundRepairMesh.visible = false;
+      backgroundRepairMesh.renderOrder = 0;
+      scene.add(backgroundRepairMesh);
+
       hairModelMount = new THREE.Group();
       hairModelMount.visible = false;
       hairModelMount.rotation.order = "XYZ";
       scene.add(hairModelMount);
 
+      const faceGeometry = new THREE.BufferGeometry();
+      const facePositions = new THREE.BufferAttribute(new Float32Array(468 * 3), 3);
+      facePositions.setUsage(THREE.DynamicDrawUsage);
+      faceGeometry.setAttribute('position', facePositions);
+      const connections = FaceLandmarker.FACE_LANDMARKS_TESSELATION;
+      // Eyelid/lip holes belong in a face model, not a depth-only occlusion mask.
+      faceGeometry.setIndex(tracking.sealedFaceTriangles(connections));
       faceOccluder = new THREE.Mesh(
-        new THREE.CircleGeometry(0.5, 64),
+        faceGeometry,
         new THREE.MeshBasicMaterial({
           colorWrite: false,
           depthWrite: true,
@@ -200,6 +229,7 @@
       );
       faceOccluder.visible = false;
       faceOccluder.renderOrder = -100;
+      faceOccluder.frustumCulled = false;
       scene.add(faceOccluder);
 
       modelLoader = new GLTFLoader();
@@ -310,11 +340,12 @@
       if (version !== modelLoadVersion) return;
       clearActiveModel();
       console.error("Mirrorly 3D hairstyle failed to load", error);
+      modelCache.delete(profile.src);
       announceModelStatus("fallback", { model: profile.src, message: error.message });
     }
   }
 
-  function setHair(sourceCanvas, style, color, foregroundCanvas = null) {
+  function setHair(sourceCanvas, style, color, foregroundCanvas = null, repairCanvas = null) {
     if (!renderer || !sourceCanvas || !style) return;
     hairTexture?.dispose();
     hairTexture = new THREE.CanvasTexture(sourceCanvas);
@@ -334,6 +365,51 @@
       hairFrontMesh.material.map = hairFrontTexture;
     }
     hairFrontMesh.material.needsUpdate = true;
+    backgroundRepairTexture?.dispose();
+    backgroundRepairTexture = null;
+    backgroundRepairMesh.material.map = null;
+    backgroundRepairMesh.visible = false;
+    if (style.aiAttachment && repairCanvas) {
+      backgroundRepairTexture = new THREE.CanvasTexture(repairCanvas);
+      backgroundRepairTexture.colorSpace = THREE.SRGBColorSpace;
+      backgroundRepairTexture.flipY = false;
+      backgroundRepairTexture.needsUpdate = true;
+      backgroundRepairMesh.material.map = backgroundRepairTexture;
+    }
+    backgroundRepairMesh.material.needsUpdate = true;
+    // Unlike scalp hair, repaired room pixels stay in their capture screen
+    // coordinates. Never curve, scale, or rotate the background with the head.
+    if (style.aiAttachment) {
+      const crop = style.aiAttachment.crop;
+      const positions = backgroundRepairMesh.geometry.attributes.position;
+      const uv = backgroundRepairMesh.geometry.attributes.uv;
+      for (let i = 0; i < positions.count; i++) {
+        positions.setXYZ(i, crop.x + uv.getX(i) * crop.width, crop.y + uv.getY(i) * crop.height, -style.aiAttachment.faceWidth);
+      }
+      positions.needsUpdate = true;
+      backgroundRepairMesh.frustumCulled = false;
+    }
+    for (const mesh of [hairMesh, hairFrontMesh]) {
+      mesh.geometry.dispose();
+      // A subdivided, landmark-depth strip curves around the forehead/temples.
+      // It remains single-view 2.5D, not a generated volumetric hairstyle model.
+      mesh.geometry = style.aiAttachment ? new THREE.PlaneGeometry(1, 1, 32, 1) : new THREE.PlaneGeometry(1, 1);
+      if (style.aiAttachment) {
+        const positions = mesh.geometry.attributes.position;
+        const uv = mesh.geometry.attributes.uv;
+        for (let i = 0; i < positions.count; i += 1) {
+          // flipY=false means v=0 is the top row of the source canvas.
+          const p = tracking.capturePointToHead(style.aiAttachment, uv.getX(i), uv.getY(i));
+          positions.setXYZ(i, ...p);
+        }
+        mesh.geometry.userData.headPoints = Array.from(positions.array);
+        positions.setUsage(THREE.DynamicDrawUsage);
+        mesh.frustumCulled = false;
+      }
+    }
+    hairFrontMesh.material.depthTest = !style.aiAttachment;
+    hairMesh.material.toneMapped = !style.aiAttachment;
+    hairFrontMesh.material.toneMapped = !style.aiAttachment;
     styleProfile = {
       id: style.id,
       faceOpeningRatio: style.faceOpeningRatio,
@@ -342,9 +418,10 @@
       faceOffsetXRatio: style.faceOffsetXRatio || 0,
       aspect: sourceCanvas.height / sourceCanvas.width,
       model3d: style.model3d || null,
-      layered2d: Boolean(foregroundCanvas)
+      layered2d: Boolean(foregroundCanvas),
+      aiAttachment: style.aiAttachment || null
     };
-    trackedHairVisible = false;
+    if (filteredFacePose) applyFacePose(filteredFacePose, { x: 0, y: 0, scale: 100, rotation: 0, opacity: 1 });
     const version = ++modelLoadVersion;
     hairModelMount.visible = false;
     faceOccluder.visible = false;
@@ -357,13 +434,24 @@
   }
 
   function setEnabled(value) {
+    if (value && !enabled) {
+      lastFaceAt = null;
+      lastVideoTime = -1;
+      lastDetectionAt = -Infinity;
+      rawFacePose = null;
+      filteredFacePose = null;
+      latestLandmarks = null;
+      poseFilter?.reset();
+      trackingStartedAt = null;
+      detectionCount = 0;
+    }
     enabled = value;
     if (!value && hairMesh) {
       hairMesh.visible = false;
       hairFrontMesh.visible = false;
+      backgroundRepairMesh.visible = false;
       hairModelMount.visible = false;
       faceOccluder.visible = false;
-      trackedHairVisible = false;
     }
     if (!value && renderer) renderer.clear();
   }
@@ -380,201 +468,150 @@
     }
   }
 
-  function mirroredPoint(landmark, width, height) {
-    return {
-      x: (1 - landmark.x) * width,
-      y: landmark.y * height,
-      z: landmark.z
-    };
-  }
-
-  function averageMirroredPoint(landmarks, indices, width, height) {
-    const total = indices.reduce((sum, index) => {
-      const point = mirroredPoint(landmarks[index], width, height);
-      sum.x += point.x;
-      sum.y += point.y;
-      sum.z += point.z;
-      return sum;
-    }, { x: 0, y: 0, z: 0 });
-    return {
-      x: total.x / indices.length,
-      y: total.y / indices.length,
-      z: total.z / indices.length
-    };
-  }
-
-  function processLandmarks(landmarks, width, height, controls, facialMatrix) {
-    const templeA = mirroredPoint(landmarks[234], width, height);
-    const templeB = mirroredPoint(landmarks[454], width, height);
-    const left = templeA.x < templeB.x ? templeA : templeB;
-    const right = templeA.x < templeB.x ? templeB : templeA;
-    const sideA = averageMirroredPoint(landmarks, [234, 127, 162], width, height);
-    const sideB = averageMirroredPoint(landmarks, [454, 356, 389], width, height);
-    const eyeA = mirroredPoint(landmarks[33], width, height);
-    const eyeB = mirroredPoint(landmarks[263], width, height);
-    const eyeLeft = eyeA.x < eyeB.x ? eyeA : eyeB;
-    const eyeRight = eyeA.x < eyeB.x ? eyeB : eyeA;
-    const nose = averageMirroredPoint(landmarks, [1, 4, 5], width, height);
-    const forehead = mirroredPoint(landmarks[10], width, height);
-    const chin = mirroredPoint(landmarks[152], width, height);
-    const faceWidth = Math.hypot(right.x - left.x, right.y - left.y) * 1.05;
-    const templeCenterX = (left.x + right.x) / 2;
-    const sideCenterX = (sideA.x + sideB.x) / 2;
-    const eyeCenterX = (eyeLeft.x + eyeRight.x) / 2;
-    const faceCenterX = templeCenterX * 0.58 + sideCenterX * 0.27 + eyeCenterX * 0.15;
-    const faceCenterY = (forehead.y + chin.y) / 2;
-    const scale = controls.scale / 100;
-    const drawWidth = faceWidth / styleProfile.faceOpeningRatio * scale;
-    const verticalSpan = Math.max(1, chin.y - forehead.y);
+  function applyFacePose(pose, controls) {
+    const scale = (controls.scale ?? 100) / 100;
+    const drawWidth = pose.faceWidth / styleProfile.faceOpeningRatio * scale;
     const drawHeight = styleProfile.faceOpeningHeightRatio
-      ? verticalSpan / styleProfile.faceOpeningHeightRatio * scale
+      ? pose.faceHeight / styleProfile.faceOpeningHeightRatio * scale
       : drawWidth * styleProfile.aspect;
-    const templeRoll = Math.atan2(right.y - left.y, right.x - left.x);
-    const eyeRoll = Math.atan2(eyeRight.y - eyeLeft.y, eyeRight.x - eyeLeft.x);
-    const roll = templeRoll * 0.72 + eyeRoll * 0.28;
-    let yaw = Math.max(-0.48, Math.min(0.48, (nose.x - faceCenterX) / faceWidth * 1.65));
-    let pitch = Math.max(-0.28, Math.min(0.28, ((nose.y - forehead.y) / verticalSpan - 0.53) * 1.3));
+    const q = new THREE.Quaternion().fromArray(pose.quaternion);
+    const euler = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+    Object.assign(current, {
+      x: styleProfile.model3d ? pose.x + controls.x : pose.faceCenterX + pose.faceWidth * styleProfile.faceOffsetXRatio + controls.x,
+      y: styleProfile.model3d ? pose.y + controls.y : pose.faceCenterY + drawHeight * (0.5 - styleProfile.faceCenterYRatio) + controls.y,
+      width: drawWidth, height: drawHeight,
+      roll: euler.z + controls.rotation * Math.PI / 180,
+      yaw: euler.y, pitch: euler.x,
+      faceWidth: pose.faceWidth, faceHeight: pose.faceHeight,
+      faceCenterX: pose.faceCenterX, faceCenterY: pose.faceCenterY,
+      foreheadX: pose.foreheadX, foreheadY: pose.foreheadY,
+      fitErrorPx: pose.fitErrorPx,
+      modelScale: styleProfile.model3d ? pose.faceWidth / styleProfile.model3d.canonicalFaceWidth * scale : 1,
+      opacity: controls.opacity
+    });
+  }
 
-    if (facialMatrix?.data?.length === 16) {
-      try {
-        const matrix = new THREE.Matrix4().fromArray(facialMatrix.data);
-        const position = new THREE.Vector3();
-        const quaternion = new THREE.Quaternion();
-        const matrixScale = new THREE.Vector3();
-        matrix.decompose(position, quaternion, matrixScale);
-        const pose = new THREE.Euler().setFromQuaternion(quaternion, "YXZ");
-        yaw = Math.max(-0.72, Math.min(0.72, -pose.y));
-        pitch = Math.max(-0.46, Math.min(0.46, pose.x));
-      } catch {
-        // The landmark-derived pose above remains a stable fallback.
-      }
+  function processLandmarks(landmarks, width, height, controls, facialMatrix, now) {
+    const pose = tracking.fitFace(landmarks, width, height, facialMatrix);
+    if (!pose) return false;
+    if (lastFaceAt === null || now - lastFaceAt >= 220) poseFilter.reset();
+    rawFacePose = pose;
+    filteredFacePose = poseFilter.filter(pose, now);
+    latestLandmarks = landmarks;
+    applyFacePose(filteredFacePose, controls);
+    lastFaceAt = now;
+    trackingStartedAt ??= now;
+    detectionCount += 1;
+    return true;
+  }
+
+  function updateFaceOccluder(useTrue3d, profile) {
+    if (!latestLandmarks || !rawFacePose || !filteredFacePose) return;
+    const positions = faceOccluder.geometry.attributes.position;
+    const ratio = filteredFacePose.faceWidth / rawFacePose.faceWidth;
+    const rawQ = new THREE.Quaternion().fromArray(rawFacePose.quaternion);
+    const q = new THREE.Quaternion().fromArray(filteredFacePose.quaternion);
+    const delta = q.multiply(rawQ.invert());
+    const point = new THREE.Vector3();
+    const depth = useTrue3d ? current.modelScale * (profile.occluderDepth ?? 0.72) : 1;
+    for (let i = 0; i < 468; i += 1) {
+      const landmark = latestLandmarks[i];
+      point.set(
+        (1 - landmark.x) * outputCanvas.width - rawFacePose.x,
+        landmark.y * outputCanvas.height - rawFacePose.y,
+        (rawFacePose.depthOrigin - landmark.z) * outputCanvas.width
+      ).multiplyScalar(ratio).applyQuaternion(delta);
+      positions.setXYZ(i,
+        filteredFacePose.x + point.x,
+        filteredFacePose.y + point.y,
+        useTrue3d ? depth + point.z : 1 + Math.max(-0.3, Math.min(0.3, point.z / current.faceWidth))
+      );
     }
-
-    target.x = faceCenterX
-      + (styleProfile.model3d ? 0 : faceWidth * styleProfile.faceOffsetXRatio)
-      + controls.x;
-    target.y = styleProfile.model3d
-      ? faceCenterY + controls.y
-      : faceCenterY + drawHeight * (0.5 - styleProfile.faceCenterYRatio) + controls.y;
-    target.width = drawWidth;
-    target.height = drawHeight;
-    target.roll = roll + controls.rotation * Math.PI / 180;
-    target.yaw = yaw * controls.depth;
-    target.pitch = pitch * controls.depth;
-    target.faceWidth = faceWidth;
-    target.faceHeight = verticalSpan;
-    target.faceCenterX = faceCenterX;
-    target.faceCenterY = faceCenterY;
-    target.foreheadY = forehead.y;
-    target.modelScale = styleProfile.model3d
-      ? faceWidth / styleProfile.model3d.canonicalFaceWidth * scale
-      : 1;
-    target.opacity = controls.opacity;
-    lastFaceAt = performance.now();
-  }
-
-  function smoothValue(value, next, amount) {
-    return value + (next - value) * amount;
-  }
-
-  function smoothAngle(value, next, amount) {
-    const difference = Math.atan2(Math.sin(next - value), Math.cos(next - value));
-    return value + difference * amount;
+    positions.needsUpdate = true;
+    faceOccluder.position.set(0, 0, 0);
+    faceOccluder.scale.set(1, 1, 1);
+    faceOccluder.rotation.set(0, 0, 0);
   }
 
   function renderTrackedHair(now, controls, showOverlay) {
-    const faceIsFresh = now - lastFaceAt < 420;
-    const shouldShow = Boolean(enabled && styleProfile && showOverlay && faceIsFresh);
-    const useTrue3d = Boolean(
-      shouldShow &&
-      activeHairModel &&
-      activeModelProfile &&
-      activeModelStyleId === styleProfile.id
-    );
+    const freshness = tracking.trackingAge(now, lastFaceAt);
+    const shouldShow = Boolean(enabled && styleProfile && showOverlay && freshness.tracking && filteredFacePose);
+    const useTrue3d = Boolean(shouldShow && activeHairModel && activeModelProfile && activeModelStyleId === styleProfile.id);
     const useLayered2d = Boolean(shouldShow && !useTrue3d && styleProfile.layered2d && hairFrontTexture);
     hairMesh.visible = shouldShow && !useTrue3d;
     hairFrontMesh.visible = useLayered2d;
+    backgroundRepairMesh.visible = Boolean(shouldShow && !useTrue3d && styleProfile.aiAttachment && backgroundRepairTexture);
     hairModelMount.visible = useTrue3d;
     faceOccluder.visible = useTrue3d || useLayered2d;
 
     if (shouldShow) {
-      if (!trackedHairVisible) {
-        for (const key of Object.keys(current)) current[key] = target[key];
-        current.opacity = 0;
+      // Filter once per measured frame, not repeatedly per display frame.
+      applyFacePose(filteredFacePose, controls);
+      const attachment = styleProfile.aiAttachment;
+      const opacity = current.opacity * freshness.opacity
+        * (attachment ? tracking.aiViewOpacity(filteredFacePose, attachment) : 1);
+      if (backgroundRepairMesh.visible) {
+        backgroundRepairMesh.material.opacity = opacity * tracking.backgroundRepairOpacity(filteredFacePose, attachment);
+        backgroundRepairMesh.visible = backgroundRepairMesh.material.opacity > 0.001;
       }
-      const travel = Math.hypot(target.x - current.x, target.y - current.y);
-      const relativeTravel = travel / Math.max(1, target.faceWidth);
-      const positionAmount = Math.max(0.24, Math.min(0.52, 0.24 + relativeTravel * 0.72));
-      const scaleAmount = Math.max(0.22, Math.min(0.44,
-        0.22 + Math.abs(target.width - current.width) / Math.max(1, target.width) * 0.7
-      ));
-      current.x = smoothValue(current.x, target.x, positionAmount);
-      current.y = smoothValue(current.y, target.y, positionAmount);
-      current.width = smoothValue(current.width, target.width, scaleAmount);
-      current.height = smoothValue(current.height, target.height, scaleAmount);
-      current.roll = smoothAngle(current.roll, target.roll, 0.26);
-      current.yaw = smoothAngle(current.yaw, target.yaw, 0.22);
-      current.pitch = smoothAngle(current.pitch, target.pitch, 0.22);
-      current.modelScale = smoothValue(current.modelScale, target.modelScale, scaleAmount);
-      current.faceWidth = smoothValue(current.faceWidth, target.faceWidth, scaleAmount);
-      current.faceHeight = smoothValue(current.faceHeight, target.faceHeight, scaleAmount);
-      current.faceCenterX = smoothValue(current.faceCenterX, target.faceCenterX, positionAmount);
-      current.faceCenterY = smoothValue(current.faceCenterY, target.faceCenterY, positionAmount);
-      current.foreheadY = smoothValue(current.foreheadY, target.foreheadY, positionAmount);
-      current.opacity = smoothValue(current.opacity, target.opacity, 0.25);
-
       if (useTrue3d) {
         const profile = activeModelProfile;
-        const modelX = current.x + current.faceWidth * (profile.xOffsetRatio || 0);
-        const modelY = current.y + current.faceHeight * (profile.yOffsetRatio || 0);
-        hairModelMount.position.set(modelX, modelY, profile.depthOffset || 0);
+        const q = new THREE.Quaternion().fromArray(filteredFacePose.quaternion);
+        const manualRoll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), controls.rotation * Math.PI / 180);
+        q.premultiply(manualRoll);
+        // Calibration offsets belong to the head, so they rotate with it.
+        const offset = new THREE.Vector3(
+          current.faceWidth * (profile.xOffsetRatio ?? 0),
+          current.faceHeight * (profile.yOffsetRatio ?? 0),
+          profile.depthOffset ?? 0
+        ).applyQuaternion(q);
+        hairModelMount.position.set(current.x + offset.x, current.y + offset.y, offset.z);
         hairModelMount.scale.set(current.modelScale, -current.modelScale, current.modelScale);
-        hairModelMount.rotation.set(
-          -current.pitch * (profile.pitchScale ?? 1),
-          current.yaw * (profile.yawScale ?? 1),
-          current.roll
-        );
+        hairModelMount.quaternion.copy(q);
         forEachModelMaterial((material) => {
-          material.opacity = (material.userData.mirrorlyBaseOpacity ?? 1) * current.opacity;
+          material.opacity = (material.userData.mirrorlyBaseOpacity ?? 1) * opacity;
         });
-
-        faceOccluder.position.set(
-          modelX,
-          modelY + current.faceHeight * (profile.occluderYOffsetRatio || 0.02),
-          current.modelScale * (profile.occluderDepth || 0.72)
-        );
-        faceOccluder.scale.set(
-          current.faceWidth * (profile.occluderWidthRatio || 0.82),
-          current.faceHeight * (profile.occluderHeightRatio || 1.05),
-          1
-        );
-        faceOccluder.rotation.set(-current.pitch, current.yaw, current.roll);
+        updateFaceOccluder(true, profile);
+      } else if (attachment) {
+        // Capture pixels already contain the original rotation. Undo it once,
+        // then rotate around the tracked head origin, not the image crop center.
+        for (const [mesh, foreground] of [[hairMesh, false], [hairFrontMesh, true]]) {
+          const positions = mesh.geometry.attributes.position;
+          const points = mesh.geometry.userData.headPoints;
+          for (let i = 0; i < positions.count; i += 1) {
+            const p = tracking.projectHeadPoint(points.slice(i * 3, i * 3 + 3), filteredFacePose);
+            positions.setXYZ(i, p[0], p[1], p[2] + (foreground ? current.faceWidth : 0));
+          }
+          positions.needsUpdate = true;
+          mesh.position.set(0, 0, 0);
+          mesh.scale.set(1, 1, 1);
+          mesh.quaternion.identity();
+          mesh.material.opacity = opacity;
+        }
+        updateFaceOccluder(true, { occluderDepth: 0 });
       } else {
+        // Planes are honest fallbacks: they cannot expose unseen side/back hair.
         hairMesh.position.set(current.x, current.y, 0);
         hairMesh.scale.set(current.width, current.height, 1);
         hairMesh.rotation.set(current.pitch, current.yaw, current.roll);
-        hairMesh.material.opacity = current.opacity;
+        hairMesh.material.opacity = opacity;
         if (useLayered2d) {
           hairFrontMesh.position.set(current.x, current.y, 2);
           hairFrontMesh.scale.set(current.width, current.height, 1);
-          hairFrontMesh.rotation.set(current.pitch, current.yaw, current.roll);
-          hairFrontMesh.material.opacity = current.opacity;
-          faceOccluder.position.set(
-            current.faceCenterX,
-            current.faceCenterY + current.faceHeight * 0.025,
-            1
-          );
-          faceOccluder.scale.set(
-            current.faceWidth * 0.91,
-            current.faceHeight * 1.01,
-            1
-          );
-          faceOccluder.rotation.set(-current.pitch, current.yaw, current.roll);
+          hairFrontMesh.rotation.copy(hairMesh.rotation);
+          hairFrontMesh.material.opacity = opacity;
+          updateFaceOccluder(false, null);
         }
       }
     }
-    trackedHairVisible = shouldShow;
     renderer.render(scene, camera);
+  }
+
+  async function prepareHairSegmentation() {
+    if (!initializationPromise) return false;
+    await initializationPromise;
+    await getHairSegmenter();
+    return true;
   }
 
   async function segmentHair(imageSource) {
@@ -620,11 +657,14 @@
     const height = videoElement.videoHeight;
     resize(width, height);
 
-    if (videoElement.currentTime !== lastVideoTime && now - lastDetectionAt >= 66) {
+    if (videoElement.currentTime !== lastVideoTime && now - lastDetectionAt >= detectionIntervalMs) {
       lastVideoTime = videoElement.currentTime;
       lastDetectionAt = now;
+      const inferenceStarted = performance.now();
       try {
-        const result = landmarker.detectForVideo(videoElement, now);
+        const timestamp = Math.max(now, lastInferenceTimestamp + 0.001);
+        lastInferenceTimestamp = timestamp;
+        const result = landmarker.detectForVideo(videoElement, timestamp);
         const landmarks = result.faceLandmarks?.[0];
         if (landmarks) {
           processLandmarks(
@@ -632,11 +672,16 @@
             width,
             height,
             controls,
-            result.facialTransformationMatrixes?.[0]
+            result.facialTransformationMatrixes?.[0],
+            now
           );
         }
       } catch {
         // Keep the previous smoothed pose for a brief interval on a dropped frame.
+      } finally {
+        const elapsed = performance.now() - inferenceStarted;
+        inferenceMs = inferenceMs ? inferenceMs * 0.8 + elapsed * 0.2 : elapsed;
+        detectionIntervalMs = Math.max(1000 / 60, inferenceMs * 1.2);
       }
     }
     renderTrackedHair(now, controls, showOverlay);
@@ -700,9 +745,9 @@
   function getStatus(now = performance.now()) {
     return {
       enabled,
-      tracking: now - lastFaceAt < 420,
+      tracking: Boolean(enabled && tracking?.trackingAge(now, lastFaceAt).tracking && filteredFacePose),
       styleId: styleProfile?.id || "",
-      renderMode: activeHairModel && activeModelStyleId === styleProfile?.id ? "3d" : "png",
+      renderMode: styleProfile?.aiAttachment ? "ai" : (activeHairModel && activeModelStyleId === styleProfile?.id ? "3d" : "png"),
       pose: {
         x: current.x,
         y: current.y,
@@ -715,9 +760,56 @@
         faceHeight: current.faceHeight,
         faceCenterX: current.faceCenterX,
         faceCenterY: current.faceCenterY,
+        foreheadX: current.foreheadX,
         foreheadY: current.foreheadY
+      },
+      metrics: {
+        inferenceMs: Math.round(inferenceMs * 10) / 10,
+        trackingFps: trackingStartedAt !== null && now > trackingStartedAt
+          ? Math.round(Math.max(0, detectionCount - 1) * 1000 / (now - trackingStartedAt)) : 0,
+        fitErrorPx: Math.round((current.fitErrorPx ?? 0) * 10) / 10,
+        frameAgeMs: lastFaceAt === null ? null : Math.max(0, Math.round(now - lastFaceAt)),
+        occluder: 'landmark-depth-mesh'
       }
     };
+  }
+
+  function getCapturePose() {
+    if (!rawFacePose || !latestLandmarks || !enabled) return null;
+    // Numeric geometry only: raw pose matches the captured camera frame.
+    const pose = rawFacePose;
+    return {
+      headX: pose.x, headY: pose.y, faceWidth: pose.faceWidth,
+      faceHeight: pose.faceHeight, faceCenterX: pose.faceCenterX,
+      faceCenterY: pose.faceCenterY, foreheadX: pose.foreheadX,
+      foreheadY: pose.foreheadY, roll: pose.roll, yaw: pose.yaw,
+      pitch: pose.pitch, quaternion: pose.quaternion.slice(),
+      foreheadDepth: (pose.depthOrigin - latestLandmarks[10].z) * outputCanvas.width,
+      depthSamples: [127, 10, 356].map((index) => ({
+        x: (1 - latestLandmarks[index].x) * outputCanvas.width,
+        depth: (pose.depthOrigin - latestLandmarks[index].z) * outputCanvas.width
+      })).sort((a, b) => a.x - b.x)
+    };
+  }
+
+  function createCaptureFaceMask() {
+    if (!rawFacePose || !latestLandmarks || !enabled) return null;
+    const ids = tracking.orderedContour(FaceLandmarker.FACE_LANDMARKS_FACE_OVAL);
+    if (ids.length < 3) return null;
+    // This local canvas is a compositing input, not part of status diagnostics.
+    const mask = document.createElement('canvas');
+    mask.width = outputCanvas.width; mask.height = outputCanvas.height;
+    const ctx = mask.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#fff';
+    ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(2, rawFacePose.faceWidth * 0.05);
+    ctx.filter = 'blur(' + Math.max(0.5, rawFacePose.faceWidth * 0.006) + 'px)';
+    ctx.beginPath();
+    ids.forEach((id, index) => {
+      const p = latestLandmarks[id], x = (1 - p.x) * mask.width, y = p.y * mask.height;
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    return mask;
   }
 
   function dispose() {
@@ -725,6 +817,9 @@
     clearActiveModel();
     hairTexture?.dispose();
     hairFrontTexture?.dispose();
+    backgroundRepairTexture?.dispose();
+    backgroundRepairMesh?.geometry.dispose();
+    backgroundRepairMesh?.material.dispose();
     hairMesh?.geometry.dispose();
     hairMesh?.material.dispose();
     hairFrontMesh?.geometry.dispose();
@@ -758,7 +853,10 @@
     update,
     measureImage,
     segmentHair,
+    prepareHairSegmentation,
     getStatus,
+    getCapturePose,
+    createCaptureFaceMask,
     dispose
   };
 })();

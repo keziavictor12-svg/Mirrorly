@@ -13,10 +13,13 @@ Work only inside `C:\Users\DELL\mirrorly` unless the user explicitly expands sco
 - Git repository root: `MirrorlyLaptopApp/.git/`
 - Public GitHub repository: `https://github.com/keziavictor12-svg/Mirrorly`
 - Repository exclusions: `MirrorlyLaptopApp/.gitignore`
-- Repository copy of this skill: `MirrorlyLaptopApp/SKILL.md`
+- Project skill/source of truth: `MirrorlyLaptopApp/SKILL.md`
 - Web entry point: `MirrorlyLaptopApp/public/index.html`
 - Styling: `MirrorlyLaptopApp/public/styles.css`
 - Camera, capture, fitting, tinting, and compositing: `MirrorlyLaptopApp/public/app.js`
+- Live pose fitting and temporal filters: `MirrorlyLaptopApp/public/tracking.js`
+- Deterministic tracking regression tests: `MirrorlyLaptopApp/tests/tracking.test.cjs`
+- Headless Edge/WebGL integration test: `MirrorlyLaptopApp/tests/browser-tracking.cjs`
 - Local HTTP server: `MirrorlyLaptopApp/server.js`
 - Secure API-key setup and server restart: `Set-MirrorlyApiKey-And-Restart.ps1`
 - Final and source hairstyle assets: `MirrorlyLaptopApp/public/assets/hair/`
@@ -52,13 +55,13 @@ Maintain a laptop-local, single-salon experience:
 1. Start the webcam locally.
 2. Automatically enter Live AI AR after camera permission; do not require a captured photo to begin the hairstyle try-on.
 3. Track face position, scale, roll, yaw, and pitch continuously and keep the selected hairstyle attached as the user moves.
-4. Apply every style and color change immediately to the moving live overlay; all eight styles use textured true-3D GLBs, with tracked PNG fallback only while a model loads or if it fails.
+4. Keep the customer-facing live preview camera-only until a completed AI hairstyle matches the selected style and color. Never show the catalog GLB/PNG first, while generating, after failure, or after a selection change. Keep the eight catalog GLBs for internal validation/preloading, not as a visible customer fallback.
 5. Keep Optional AI photo as a secondary action that freezes the current pose and preserves the captured-face side-card workflow.
 6. Automatically align live and captured hairstyles from MediaPipe measurements using fixed internal fit defaults; do not expose manual fit controls or a Step 3 section.
 7. When the user explicitly selects Optional AI photo, create an identity-preserving AI still that replaces hair pixels instead of layering a PNG.
 8. Save a local PNG preview.
 
-Keep live camera frames and MediaPipe landmark processing in browser memory. Live AI AR is the primary no-upload workflow and must start automatically after camera permission. Remote generative image editing is not a frame-by-frame live renderer; use it only for the explicit Optional AI photo action. Upload only the frozen portrait, AR placement preview, and selected hairstyle reference. Do not upload continuously, persist portraits server-side, expose the API key to browser code, or add accounts, cloud storage, tracking, comparison UI, or language options unless the user requests them.
+Keep live camera frames and MediaPipe landmark processing in browser memory. Local tracking starts automatically after camera permission, but AI hair generation is an explicit paid action: **Create AI hair for live AR** captures/uploads one frame with a hidden placement guide, edit mask, and hairstyle reference, then applies the finished AI layer locally. Style/color changes hide stale hair and require an explicit generation for that look; do not silently make additional paid requests. Optional AI photo is the separate still-photo action. Neither action uploads continuously. Do not persist portraits server-side, expose the API key to browser code, or add accounts, cloud storage, tracking, comparison UI, or language options unless requested.
 
 ## Hairstyle catalog
 
@@ -111,7 +114,27 @@ Treat alignment as style-specific. Do not change Bob or Feather calibration when
 
 Browser `FaceDetector` support is optional. The bundled MediaPipe model is the primary tracker. Keep alignment automatic with fixed internal defaults, provide retake as the recovery path when measurement is unavailable, and do not claim pixel-perfect automatic alignment.
 
-Live AI AR is implemented with the bundled MediaPipe Face Landmarker model in public/models/, the local `hair_segmenter.tflite` hair-only model, the local WASM runtime in public/vendor/mediapipe/, and the local Three.js renderer in public/ar.js. It starts automatically after camera permission. Hairstyle selection and color changes call the renderer immediately without capture. The read-only MirrorlyAR.getStatus() hook exposes enabled/tracking state, renderer mode, style ID, and numeric pose data for trial verification; it must not expose camera pixels or identity data. All eight hairstyles load textured GLBs from public/assets/models/*.glb. Bob and Crew are direct mesh conversions; Feather uses the attributed CC BY 4.0 `o4saken_long01` source; V, U, Buzz, Curtain Bangs, and Skin Fade are deterministic geometry variants of CC0 MakeHuman system meshes. They use PBR lighting, a depth-only face occluder, the MediaPipe facial transformation matrix for yaw and pitch, multi-landmark mirrored translation/scale, adaptive motion smoothing, and per-style crown/head pivots calibrated in public/app.js. Generated live AI hair is segmented locally into hair-only pixels, split into behind-face and foreground strands, and rendered with tracked face-depth occlusion; if segmentation is unavailable, retain the fitted difference-mask fallback. Keep the tracked PNG plane available while a GLB is loading or if loading fails.
+Live tracking uses the bundled MediaPipe Face Landmarker, local `hair_segmenter.tflite`, local WASM runtime, and Three.js renderer in `public/ar.js`. The numeric `MirrorlyAR.getStatus()` hook must not expose camera pixels or identity data. All eight textured catalog GLBs remain available in `public/assets/models/`: Bob/Crew are direct conversions, Feather uses attributed CC BY 4.0 `o4saken_long01`, and V/U/Buzz/Curtain/Skin Fade are deterministic CC0 MakeHuman variants. The customer-facing live view now displays only matching completed AI hair, not these catalog meshes or PNG fallbacks. Keep the raw camera unchanged while waiting; build the live placement reference off-screen. Segment both the frozen original portrait and AI result locally. Retain semantic AI hair even where its pixels barely changed. Keep replacement background in a separate, capture-screen-anchored repair texture, never in scalp or foreground hair. Split foreground hair using the measured landmark face contour with a soft contact margin, not a generic ellipse. On segmentation failure, use the fitted difference-mask AI layer without background repair, not catalog hair.
+
+### AI-only live attachment (2026-09-13)
+
+- `liveAiHairReady()` gates both `MirrorlyAR.update(..., showOverlay)` and compositing. Generation, missing/mismatched results, pause, or failure leaves the live camera unchanged. Do not auto-generate on camera start or style/color changes.
+- `MirrorlyAR.getCapturePose()` supplies raw numeric head position, quaternion, face scale, and three forehead/temple depth samples for the frozen frame. Undo the capture quaternion before storing normalized crop points, then project them through the current filtered pose about the head origin. Preserve asymmetric crop offsets and pixel aspect ratio; do not apply the captured rotation twice.
+- Render generated AI pixels on a subdivided strip with interpolated forehead/temple depth. This is single-view **2.5D**, not a volumetric AI-generated hairstyle. Retain behind-face depth testing and a semantic-only foreground layer. Seal the tessellation's eye/inner-lip boundaries in the depth-only occluder to prevent rear hair leaking into the eyes.
+- Fade the AI layer between roughly 35 and 45 degrees of view change and hide beyond that range; never invent unseen sides by displaying a distorted plane or reverting to catalog hair. A new frontal generation is the recovery path.
+- Reject results if the requested style/color or live session changed, including after local segmentation. Keep Optional AI Photo and its server endpoint unchanged during these live-only corrections.
+- Style badges say **AI LIVE**; do not imply that the personalized AI layer itself is a true-3D GLB.
+- For crown transparency gaps, fill only small enclosed semantic-matte components above the upper-forehead limit. Preserve the outer silhouette and face opening, and retain the AI photo's RGB so scalp parting is not painted over. If a screenshot still says TRUE 3D, have the user reload the current build before evaluating the new live layer.
+
+### Live contour, extent and dark-patch correction (2026-09-14)
+
+- Freeze `MirrorlyAR.createCaptureFaceMask()` alongside the original portrait and raw capture pose. The local canvas follows the ordered 36-point face boundary with a soft margin; never expose it or the raw landmarks through diagnostics. Intersect semantic hair with this measured contour for the foreground layer so the forehead depth mesh does not cut a broad band out of valid hair.
+- Use `selectHeadHair()` to keep whole semantic components touching the captured head seed. Inspect their full image extent, including long V/U tails below the seed; do not clip semantic hair with a fixed face-height ellipse. Ignore unrelated background hair components.
+- If hair reaches the generated image border, feather alpha only along those clipped borders using `captureEdgeAlpha()`, and tell the user to move back/regenerate for the complete cut. Edge blending cannot reconstruct missing hair outside the capture. Never trigger a paid retry automatically.
+- `buildLiveAiMergedLayer()` returns separate `source`, `foregroundSource`, and optional `repairSource` canvases with matching crop coordinates. `source` and `foregroundSource` contain hair only; replacement room pixels must never rotate or curve with the head.
+- Render `repairSource` behind the face/hair at fixed capture-screen coordinates. `backgroundRepairOpacity()` smoothly fades it with relative head translation, scale, or full quaternion change (including roll), independently of the broader AI hair view limit. Hair remains tracked when a repair fades. The customer's original hair may become visible again during movement; a frozen repair is not live inpainting.
+- Do not apply `applyCinematicFinish()`, vignette, contact shadows, tone mapping, or exposure changes to the live camera/face. AI hair textures use their original photographic RGB. Optional AI Photo and the non-live workflow remain unchanged.
+- Include the generic 468-vertex canonical fixture in tests with its upstream URL, hash, Apache-2.0 notice and license. Test forehead pixels outside the old oval, full long-hair extent, edge blending, rolled/translated repair disappearance with hair still visible, and unchanged live camera RGB. These controlled tests do not prove real-webcam perfection.
 
 For maintaining or adding true-3D hairstyles:
 
@@ -123,11 +146,42 @@ For maintaining or adding true-3D hairstyles:
 6. Verify the raw mesh on `3d-smoke-test.html`, then test on a real face at frontal and 15-30 degree head rotations.
 7. Treat AI-generated meshes as draft geometry requiring Blender cleanup, scalp fitting, retopology/decimation, textures, pivots, and license review before shipping.
 
+### Live tracking accuracy
+
+Use the 2026-09-13 accuracy refinement in `public/tracking.js` and `public/ar.js`:
+
+- Fit a uniform scale and head-origin translation against 15 canonical MediaPipe landmarks projected through the measured pose; use robust residual weighting rather than projected temple width. Preserve the canonical measurements' upstream URL and Apache-2.0 attribution. This is weak-perspective fitting, not physical head measurement or a calibrated perspective camera.
+- Apply the full mirrored pose quaternion (`S R S`, with `S = diag(-1, -1, 1)`) to GLBs. Do not attenuate yaw/pitch using the old 35% depth default or independently combine Euler angles from different sources. Rotate each style's calibration offsets with the head and preserve its original anchor.
+- Run time-based One Euro position/scale filtering and quaternion smoothing once per detected video frame, not per display frame. Keep filters across style/color changes, reset on restart or reacquisition, and reject malformed meshes.
+- Process distinct video frames at an inference-time-adaptive interval with a 60 Hz ceiling; do not restore the fixed 66 ms / 15 fps limit. MediaPipe still runs synchronously on the main thread, so actual tracking speed depends on the laptop.
+- Render the 468-landmark tessellated face as depth-only geometry instead of a flat circle. Keep it aligned with the filtered head pose; preserve behind-face versus foreground ordering for segmented AI planes.
+- Fade briefly on missed detections and hide by 220 ms; never report active tracking before the first successful detection or while paused.
+- Keep all eight GLBs intact for asset validation/preloading, but suppress GLB/PNG output in the customer-facing live view until matching AI is ready. Generated AI hair is non-volumetric and requires a forward-facing generation pose.
+- Use the numeric `MirrorlyAR.getStatus().metrics` diagnostics for inference time, tracking fps, fit error, frame age, and occluder type. Do not expose landmarks, frames, or identity data through diagnostics.
+
+Validate with `npm run check`, `npm test` and, with the local server running, `npm run test:browser`. Tests cover head/crop projection, depth curvature, eye/mouth topology closure, AI-only display gates, all eight internal GLBs, texture orientation, local semantic extraction, isolated background-repair retention/fading, measured foreground contours, long hair and cropped edges, unshaded camera pixels, excessive turns, pause/loss/reacquisition, and the actual preview waiting path. Fixtures are synthetic and make no camera or paid AI calls. They do not establish Snapchat-level accuracy on real people; verify diverse webcams, turns, lighting, ears, and hairlines before claiming that. Leave Optional AI Photo unchanged during live-only work.
+
 The optional final still is implemented by POST /api/ai-render in server.js using GPT Image 2 image editing. Optional AI photo must freeze the current live pose, measure it with MediaPipe, build the AR placement guide on an off-screen canvas, and then call the endpoint. The visible main preview must hold the untouched captured portrait without an AR hairstyle or cinematic overlay until the final AI image is decoded; only then replace the captured portrait. The browser sends the untouched captured portrait first, the hidden AR composite second, and the tinted hairstyle asset third. Keep all three inputs because they preserve identity, placement, and cut shape; GPT Image 2 processes every image input at high fidelity automatically. Request quality=medium, output_format=jpeg, and output_compression=90 to reduce latency while retaining salon-preview quality. Show elapsed time while AI finishes. A controlled local test on 2026-08-25 completed in 30.4 seconds versus 92.3 seconds for high-quality PNG; treat this only as a comparison benchmark because API latency varies. Keep OPENAI_API_KEY server-side as an environment variable. Treat the hidden AR result and the AI result as the photographic render for this separate still-photo workflow. Prompt the model to preserve identity, face, expression, body, clothing, background, crop, and lighting while replacing only hair. Never claim that remote generative image editing runs on every live camera frame. Do not modify this Optional AI Photo path when refining live AI AR.
+
+## AI request performance and format compatibility
+
+The 2026-09-14 request explicitly authorized optimizing both Live AI hair and Optional AI Photo while retaining medium quality. Keep the optional-photo freeze/hold/identity-preservation flow intact; its transport settings may share the live optimization. Live-only tracking work still must not change the optional-photo workflow.
+
+- All four men's catalog assets are PNG-only and have no SVG `viewBox` or `path`. `drawLiveAiStyleMask` must use the decoded PNG alpha silhouette for these styles; use an SVG path only when valid SVG metadata exists. Preserve each style's calibrated transform. Do not call `.split()` on an absent `viewBox` or invent an empty mask.
+- Keep all three model inputs: portrait, hidden placement guide, and tinted cut-shape reference. `createAiUploadDataUrl` resizes the complete frame without cropping. Upload portrait and live edit mask as PNG with the same dimensions and a 1280-pixel maximum edge; retain the original captured canvas for the waiting preview. Opaque placement guides use JPEG with a 1280-pixel maximum edge; shape references use JPEG with a 768-pixel maximum edge and quality 0.9.
+- Both endpoints accept PNG or JPEG references with correct MIME types and filenames. Portrait and alpha edit mask remain PNG. Keep legacy PNG-reference clients working. If the page reports "AR placement preview must be a PNG image" after this change, the old server is still running: restart the verified Mirrorly listener, not just the browser.
+- Both endpoints use GPT Image 2, medium quality, JPEG output, and compression 90. `chooseAiOutputSize` targets the model's 655360-pixel minimum, rounding edges up to multiples of 16 and retaining the whole frame's aspect ratio approximately. A 1280x720 upload requests 1088x608; do not restore `size=auto` for optional photos or full-resolution PNG output for live hair without reviewing latency.
+- Warm the bundled local Hair Segmenter after live tracking initializes. Cache one initialization promise. This must not upload frames, generate AI images, or introduce automatic paid retries or per-frame/style-change generation.
+- Show elapsed live-generation time. `MirrorlyAiDiagnostics.getMetrics()` records numeric preparation, request, API, post-processing, and total milliseconds for both flows in browser session memory only. Server responses expose numeric timings and `/api/ai-status` exposes the 20-second target, not a deadline. Never include portraits, keys, or landmarks in diagnostics.
+- Twenty seconds is a target, not a confirmed benchmark or guarantee. Do not abort paid generation at 20 seconds and call that a speed improvement. Measure a newly consented generation before reporting real latency; model load, remote generation, and network variation remain outside the browser's control.
+
+Validate with `npm run check`, `npm test`, and `npm run test:browser` against the restarted server. The current suite has 28 unit tests plus real Edge/WebGL checks for 8 styles x 5 colors, decoded masks/JPEG references, full-frame resizing, one local warmup, both actual frontend actions, and numeric timings. API responses are mocked; tests use generic fixtures and make no paid requests. The eight shape-reference uploads measured 11788023 bytes before versus 620157 bytes after (about 95% smaller); this is a transport comparison, not proof of 20-second AI generation.
 
 ## AI key and billing operations
 
 Use `Set-MirrorlyApiKey-And-Restart.ps1` for key setup. It prompts with `Read-Host -AsSecureString`, saves `OPENAI_API_KEY` at user scope, restarts only the Node `server.js` process listening on port 4173, and verifies `/api/ai-status`. Never request that the user paste a key into chat, print the stored value, commit it, put it in browser code, or write it to project files.
+
+Check that this utility actually exists before invoking it; it was absent from this workspace on 2026-09-14. For a restart with an already configured key, read the user-scoped key without displaying it, verify the exact Node listener on port 4173 belongs to Mirrorly, and launch the absolute `server.js` in the app directory with the key inherited and `-WindowStyle Hidden`. Do not stop the existing AI-enabled server if the stored key is unavailable. Verify `available`, `quality`, and both output formats after restarting.
 
 Run the setup utility in a visible PowerShell window:
 
@@ -149,7 +203,7 @@ Interpret common AI failures accurately:
 - Billing hard limit or insufficient quota: the key reached OpenAI, but its organization or project cannot spend. Keep the local AR capture visible, show a concise billing message, and do not break face capture. Open the Platform billing overview, organization/project limits, and usage dashboard. Add API credits or a payment method and raise the applicable hard spend limit for the project associated with the key. Retry without restarting when funding the same project; rerun the setup utility only when switching keys or projects.
 - Ordinary HTTP 429 rate limit: distinguish request/image-per-minute throttling from a billing hard limit; wait and retry only for throttling.
 
-Do not attempt to bypass billing limits, silently switch accounts, or reduce image quality while claiming the billing problem is fixed. Preserve the AR preview as a no-cost local fallback when AI rendering is unavailable.
+Do not bypass billing limits, silently switch accounts, or reduce quality while claiming billing is fixed. The current live customer fallback is the untouched camera, not a catalog AR overlay. Keep the captured still held in the optional photo path.
 
 ## Git repository and safe publishing
 
@@ -178,7 +232,7 @@ Before committing:
 2. Run a staged secret-value scan for OpenAI/GitHub token patterns and private-key headers; report filenames only and never echo matched values.
 3. Review `git status --short` and the staged file list.
 4. Confirm `node_modules`, `.edge*`, local environment files, and validation screenshots are ignored.
-5. Keep this source skill and `MirrorlyLaptopApp/SKILL.md` synchronized in the same commit.
+5. Update `MirrorlyLaptopApp/SKILL.md` with changed behavior and synchronize any additional local Mirrorly skill copy if one exists.
 6. Commit on `main`, push normally without force, and verify local and remote commit SHAs match.
 
 Do not overwrite non-empty remote history without first fetching and reconciling it. Do not use force push unless the user explicitly requests it and the exact impact has been reviewed.
@@ -186,7 +240,7 @@ Do not overwrite non-empty remote history without first fetching and reconciling
 ## UI rules
 
 - Preserve the dark teal and warm-gold salon presentation.
-- Keep live AI AR as the primary action and style Optional AI photo as secondary; users must be able to try styles, colors, pause, restart, and save without capturing.
+- Keep live AI AR primary and Optional AI photo secondary. Local camera/tracking, style/color selection, pause/restart, and saving work without optional-photo capture; creating personalized live AI hair explicitly uploads one frozen frame.
 - Keep women's and men's style labels in the two-column selector.
 - Keep the control panel scrollable so all eight styles and five colors remain reachable.
 - Keep the customer-facing flow limited to Step 1 (style) and Step 2 (color); do not restore the Step 3 fit-control section unless the user explicitly requests it.
@@ -199,12 +253,13 @@ Do not overwrite non-empty remote history without first fetching and reconciling
 After code or asset changes:
 
 1. Run `npm run check` in `MirrorlyLaptopApp`.
+   Also run `npm test` and `npm run test:browser` after live-tracker changes; keep the local server running for the browser test.
 2. Confirm `/`, `app.js`, every referenced hairstyle PNG, and every configured GLB return HTTP 200.
 3. Open `/3d-smoke-test.html` and confirm all eight labeled GLB meshes load and rotate before testing the camera.
 4. Open a cache-busted URL in Edge.
-5. Select Start live AI mirror and confirm Live AI AR starts automatically without a capture step; verify all eight styles show the TRUE 3D badge, rotate volumetrically, and fall back cleanly if a mesh cannot load.
+5. Start the live mirror and confirm local tracking starts but the customer view stays camera-only. Create AI hair explicitly; reveal it only after decoding/segmentation. Verify AI LIVE badges, generation/failure waiting behavior, and suppression of catalog GLB/PNG output.
 6. Move the test face and verify the pose changes while tracking stays active; confirm the multi-landmark anchor remains stable during translation, scale, roll, yaw, and pitch changes.
-7. For an AI-generated live hairstyle, verify the local hair segmenter loads, generated room/background pixels remain transparent, foreground strands can pass in front of the face, and side hair remains behind the tracked face occluder.
+7. Verify generated room pixels are absent from hair textures. Keep the bounded repair separate, screen-anchored, and faded during movement. Foreground strands follow the measured face contour, rear pixels are occluded, eyes remain natural, long ends are not clipped by a fixed ROI, and hair fades during excessive turns. Live camera RGB must not receive cinematic shading.
 8. Check all five colors on at least one short and one long hairstyle.
 9. Verify pause/restart, Optional AI photo, return to live mirror, automatic alignment, and save preview.
 10. If OPENAI_API_KEY is configured and funded, verify Optional AI photo creates the still without changing the live try-on into a capture-first flow, replaces original hair, removes the hollow opening and fringe, preserves identity, and saves with an ai-realistic filename. Confirm its client and server blocks remain unchanged when only live AR is being refined.
@@ -218,5 +273,6 @@ After code or asset changes:
 - The local Hair Segmenter isolates generated live hair and the face-depth occluder handles front/back ordering, but fine ear-level occlusion and strand-level geometry are still approximate. The optional AI photo handles final photographic blending when billing is available.
 - GPT Image editing is intentionally not called per video frame; live movement comes from local MediaPipe tracking plus Three.js rendering.
 - The six newly added GLB profiles use a balanced adult-head first-pass calibration; validate and refine their anchors across diverse real faces before production salon rollout.
+- The AI layer uses measured depth but is single-view 2.5D, not personalized scalp geometry or calibrated perspective. Its separate original-hair repair uses one frozen AI background and fades during head movement; original hair can reappear, and camera/lighting changes cannot always be inferred from head pose. Large turns hide hair; robust multi-view replacement and ear/hand occlusion require further work. Clipped image borders can only be blended, not reconstructed. Do not claim Snapchat parity from synthetic tests.
 - Color tinting recolors the overlay, not the customer's original hair.
 - The app is browser-based and is not yet packaged as a Windows executable.
