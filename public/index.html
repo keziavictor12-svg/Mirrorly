@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#16121f" />
     <title>Mirrorly - 3D Salon Hairstyle Preview</title>
+    <script>
+      if (window.location.hostname === "127.0.0.1") {
+        const licensedUrl = new URL(window.location.href);
+        licensedUrl.hostname = "localhost";
+        window.location.replace(licensedUrl.href);
+      }
+    </script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>

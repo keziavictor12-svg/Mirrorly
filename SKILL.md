@@ -44,7 +44,7 @@ npm run check
 npm start
 ```
 
-Open `http://127.0.0.1:4173/`. Add a unique query string such as `?v=YYYYMMDD-HHMM` after asset or JavaScript changes to bypass the browser cache.
+Open `http://localhost:4173/`. Add a unique query string such as `?v=YYYYMMDD-HHMM` after asset or JavaScript changes to bypass the browser cache. DeepAR's current Web license is bound to `localhost`; the page redirects `127.0.0.1` requests to that licensed hostname.
 
 Before starting another server, check port 4173. Reuse a working server or stop only the process that owns that port. Keep the root route query-safe: `/` with any query string must serve `public/index.html`.
 
@@ -120,10 +120,10 @@ Live tracking uses the bundled MediaPipe Face Landmarker, local `hair_segmenter.
 
 - `liveAiHairReady()` gates both `MirrorlyAR.update(..., showOverlay)` and compositing. Generation, missing/mismatched results, pause, or failure leaves the live camera unchanged. Do not auto-generate on camera start or style/color changes.
 - `MirrorlyAR.getCapturePose()` supplies raw numeric head position, quaternion, face scale, and three forehead/temple depth samples for the frozen frame. Undo the capture quaternion before storing normalized crop points, then project them through the current filtered pose about the head origin. Preserve asymmetric crop offsets and pixel aspect ratio; do not apply the captured rotation twice.
-- Render generated AI pixels on a subdivided strip with interpolated forehead/temple depth. This is single-view **2.5D**, not a volumetric AI-generated hairstyle. Retain behind-face depth testing and a semantic-only foreground layer. Seal the tessellation's eye/inner-lip boundaries in the depth-only occluder to prevent rear hair leaking into the eyes.
-- Fade the AI layer between roughly 35 and 45 degrees of view change and hide beyond that range; never invent unseen sides by displaying a distorted plane or reverting to catalog hair. A new frontal generation is the recovery path.
+- Render generated AI pixels in realism-first photographic mode: keep only about 12% of measured forehead/temple depth rather than bending the image into a rigid 3D sheet. This remains single-view **2.5D**, not a volumetric AI-generated hairstyle. Retain behind-face depth testing and a semantic-only foreground layer. Seal the tessellation's eye/inner-lip boundaries in the depth-only occluder to prevent rear hair leaking into the eyes.
+- Keep full opacity within roughly 10 degrees of the captured front view, fade from about 10 to 15 degrees, and hide beyond that range; never invent unseen sides by displaying a distorted plane or reverting to catalog hair. Apply bounded RGB correction from unchanged portrait pixels so the AI hair retains the webcam's exposure and white balance. A new frontal generation is the recovery path.
 - Reject results if the requested style/color or live session changed, including after local segmentation. Keep Optional AI Photo and its server endpoint unchanged during these live-only corrections.
-- Style badges say **AI LIVE**; do not imply that the personalized AI layer itself is a true-3D GLB.
+- Hairstyle cards have no AI LIVE, LIVE AR, or TRUE 3D badge, per the 2026-09-14 frontend request. Do not imply that the personalized AI layer itself is a true-3D GLB.
 - For crown transparency gaps, fill only small enclosed semantic-matte components above the upper-forehead limit. Preserve the outer silhouette and face opening, and retain the AI photo's RGB so scalp parting is not painted over. If a screenshot still says TRUE 3D, have the user reload the current build before evaluating the new live layer.
 
 ### Live contour, extent and dark-patch correction (2026-09-14)
@@ -132,8 +132,9 @@ Live tracking uses the bundled MediaPipe Face Landmarker, local `hair_segmenter.
 - Use `selectHeadHair()` to keep whole semantic components touching the captured head seed. Inspect their full image extent, including long V/U tails below the seed; do not clip semantic hair with a fixed face-height ellipse. Ignore unrelated background hair components.
 - If hair reaches the generated image border, feather alpha only along those clipped borders using `captureEdgeAlpha()`, and tell the user to move back/regenerate for the complete cut. Edge blending cannot reconstruct missing hair outside the capture. Never trigger a paid retry automatically.
 - `buildLiveAiMergedLayer()` returns separate `source`, `foregroundSource`, and optional `repairSource` canvases with matching crop coordinates. `source` and `foregroundSource` contain hair only; replacement room pixels must never rotate or curve with the head.
-- Render `repairSource` behind the face/hair at fixed capture-screen coordinates. `backgroundRepairOpacity()` smoothly fades it with relative head translation, scale, or full quaternion change (including roll), independently of the broader AI hair view limit. Hair remains tracked when a repair fades. The customer's original hair may become visible again during movement; a frozen repair is not live inpainting.
+- Render `repairSource` behind the face/hair at fixed capture-screen coordinates. In realism-first mode, `backgroundRepairOpacity()` starts fading after about 0.8% of a face width or roughly one degree of rotation and is gone well before the broader AI hair view limit. Hair remains tracked when a repair fades. The customer's original hair may become visible again during movement; a frozen repair is not live inpainting.
 - Do not apply `applyCinematicFinish()`, vignette, contact shadows, tone mapping, or exposure changes to the live camera/face. AI hair textures use their original photographic RGB. Optional AI Photo and the non-live workflow remain unchanged.
+- Treat the live placement preview and hairstyle image as synthetic geometry guides only. The live prompt must use them for silhouette, cut, hairline, length, and placement while explicitly rejecting their rendered material, repeated strand pattern, studio highlights, CGI/plastic finish, or lighting. Require irregular real strands, flyaways, density variation, natural roots/scalp, translucent edge wisps, and the original webcam's exposure, focus, noise, compression, white balance, and directional light. Keep this change live-only; do not modify the Optional AI Photo prompt when addressing a live AR complaint.
 - Include the generic 468-vertex canonical fixture in tests with its upstream URL, hash, Apache-2.0 notice and license. Test forehead pixels outside the old oval, full long-hair extent, edge blending, rolled/translated repair disappearance with hair still visible, and unchanged live camera RGB. These controlled tests do not prove real-webcam perfection.
 
 For maintaining or adding true-3D hairstyles:
@@ -175,7 +176,7 @@ The 2026-09-14 request explicitly authorized optimizing both Live AI hair and Op
 - Show elapsed live-generation time. `MirrorlyAiDiagnostics.getMetrics()` records numeric preparation, request, API, post-processing, and total milliseconds for both flows in browser session memory only. Server responses expose numeric timings and `/api/ai-status` exposes the 20-second target, not a deadline. Never include portraits, keys, or landmarks in diagnostics.
 - Twenty seconds is a target, not a confirmed benchmark or guarantee. Do not abort paid generation at 20 seconds and call that a speed improvement. Measure a newly consented generation before reporting real latency; model load, remote generation, and network variation remain outside the browser's control.
 
-Validate with `npm run check`, `npm test`, and `npm run test:browser` against the restarted server. The current suite has 28 unit tests plus real Edge/WebGL checks for 8 styles x 5 colors, decoded masks/JPEG references, full-frame resizing, one local warmup, both actual frontend actions, and numeric timings. API responses are mocked; tests use generic fixtures and make no paid requests. The eight shape-reference uploads measured 11788023 bytes before versus 620157 bytes after (about 95% smaller); this is a transport comparison, not proof of 20-second AI generation.
+Validate with `npm run check`, `npm test`, and `npm run test:browser` against the restarted server. The current suite has 35 unit tests plus real Edge/WebGL checks for 8 styles x 5 colors, decoded masks/JPEG references, full-frame resizing, one local warmup, both actual frontend actions, DeepAR's 40-look manifest, and numeric timings. API responses are mocked; tests use generic fixtures and make no paid requests. The eight shape-reference uploads measured 11788023 bytes before versus 620157 bytes after (about 95% smaller); this is a transport comparison, not proof of 20-second AI generation.
 
 ## AI key and billing operations
 
@@ -193,7 +194,7 @@ Verify presence without exposing the value:
 
 ```powershell
 [bool][Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'User')
-Invoke-RestMethod 'http://127.0.0.1:4173/api/ai-status'
+Invoke-RestMethod 'http://localhost:4173/api/ai-status'
 ```
 
 Interpret common AI failures accurately:
@@ -205,21 +206,31 @@ Interpret common AI failures accurately:
 
 Do not bypass billing limits, silently switch accounts, or reduce quality while claiming billing is fixed. The current live customer fallback is the untouched camera, not a catalog AR overlay. Keep the captured still held in the optional photo path.
 
-## DeepAR hairstyle export handoff (2026-09-20)
+## DeepAR provider
 
-The user asked for real `.deepar` files for the seven hairstyles besides Bob, using the existing Bob Studio effect as the reference, and asked to continue later. This work is **unfinished**. Resume from the saved project and asset state below; do not report all seven as done.
+DeepAR Web SDK 5.6.22 is installed through `deepar`. `public/deepar.js` is the customer-facing adapter; it reuses the existing camera video element, renders into `#deeparRoot`, switches the effect matching the selected style/color, pauses with Live AR, and exposes the rendered canvas for local snapshots. Keep the isolated validation surface at `public/deepar-test.html`, served from `/vendor/deepar/`.
 
-- Workspace: `C:\Users\DELL\mirrorly\MirrorlyLaptopApp`. DeepAR Studio 4.5.2.139 is installed at `C:\Program Files\DeepAR Studio\deepar_studio.exe`. Bob's editable reference is `assets-source\deepar-studio-input\Bob_f.deeparproj`; Bob's compiled reference is `public\assets\deepar\effects\bob.deepar`.
-- Completed compiled base-style exports in `public\assets\deepar\effects\`: `feather.deepar`, `v-cut.deepar`, `u-cut.deepar`, `crew-cut.deepar`, and `buzz-cut.deepar`. Each was exported by Studio from its own imported GLB, rather than renamed from Bob. `bob.deepar` also remains there. The matching editable `.deeparproj` folders are in `assets-source\deepar-studio-input\`.
-- **Still to export:** `curtain-bangs.deepar` and `skin-fade.deepar`. `curtain-bangs.deeparproj` has already imported `curtain-bangs.glb`, its generated `Node-Mesh_2.armesh`, `MirrorlyHair_2.mat`, and texture. Its `effect.json` was repaired after an accidental Studio scene replacement: it now has exactly `Hair` and `head_mesh.armesh` children, with `Hair` linked to `~/curtain-bangs.glb`, `~/Node-Mesh_2.armesh`, and `~/MirrorlyHair_2.mat`. Open this saved project in Studio, inspect, and export it. `skin-fade.deeparproj` is only a Bob project copy: import `skin-fade.glb`, save the project so Studio generates its resources, link the `Hair` node to them, reopen, and export.
-- The app's `deepar-config.cjs` still defines a separate 8-style-by-5-color manifest with filenames like `<style-id>-<color-slug>.deepar`. These base-style exports are **not** the 40 color variants. Do not claim the full DeepAR app catalog is ready merely because the seven base files exist.
-- The base-style visual fit is **not fully validated**. U Cut's Studio placement was adjusted and saved to `localPosition` `[10.4111595, -2.8295941, 0.1452455]` before export. Feather, V Cut, and Buzz Cut retain Bob's `[15.0088615, -9.0701027, 8.1312523]`. Crew Cut was changed to `[10.4111595, -10.0335941, 0.1452455]`, but its hair was not visible against the head in one Studio preview; Buzz Cut likewise appeared absent in one preview with Bob's transform. Inspect and calibrate the short styles before claiming usable AR fit. The current Crew/Buzz files are valid Studio packages, but their placement remains a known risk. Preserve each cut's own mesh, material, color uniform contract, and head occluder.
-- Working local helper scripts are in `C:\Users\DELL\AppData\Local\Temp\mirrorly-deepar-reference-20260920\`: `Send-StudioFileDrop.ps1` imports a GLB into a given Studio process with `WM_DROPFILES`; `Link-StudioHair.ps1` reads `<style>.glb.deeparimport` and replaces Bob mesh/material/scene references in `effect.json`; `Studio-Interact.ps1` guards desktop clicks by foreground/window process ownership. These helpers are temporary and are not part of the repository. Studio GUI calls can lose focus to Teams, Outlook, Terminal, Explorer, or the lock screen; inspect screenshots and confirm dialogs before the next click. Do not blindly chain GUI clicks. The user's desktop was actively in use during the attempt.
-- A reliable per-style path was: start Studio with the project directory argument; wait until its title names that project; send the GLB drop; wait for import; use **File > Save Project** and finish any native Save dialog; confirm `resources\<style>.glb.deeparimport`, generated `.armesh`, material, and texture exist; stop only that Studio process; run `Link-StudioHair.ps1`; reopen the project; inspect the `Hair` mesh/material and placement; export through Studio; copy the resulting `.deepar` into `public\assets\deepar\effects\<style>.deepar`. Exports larger than 8 MiB may show a Studio optimization modal: scroll to its bottom and click **Export** before the native Save dialog. Native dialog position changes, so inspect it before clicking Save.
-- Extra Studio exports in `assets-source\deepar-studio-input\` include `V-cutv.deepar` and `buzz.deepar` from earlier native dialog attempts. The app-facing files have the correct names. Keep unrelated worktree changes intact; the repository had many pre-existing modifications and untracked files.
-- At handoff there was no usable Studio window. Two windowless `deepar_studio` processes (PIDs 1748 and 20772) remained listed even after `Stop-Process -Force`; check whether they have exited before opening Studio again. `curtain-bangs.deeparproj\effect.json` is repaired, but Studio's other project metadata may still reflect the discarded scene edit, so verify the `Hair` node after reopening before exporting.
-- Verification already run: `node --test tests\deepar-config.test.cjs` passed 4/4 after Feather. After the remaining exports, verify all seven app-facing files exist, are nonzero and distinct from Bob, and contain their own imported mesh/texture data; rerun that test. A live licensed DeepAR camera check and style fit check remain outstanding.
+- DeepAR cannot initialize without `DEEPAR_LICENSE_KEY`; load it from the ignored local environment or server environment and never commit or print it.
+- Store exported DeepAR Studio effects at `public/assets/deepar/effects/<style-id>-<color-slug>.deepar`. `deepar-config.cjs` defines and tests the exact 8 x 5 manifest.
+- Activate DeepAR only when the current selection has a matching effect. If a look is missing or switching fails, pause DeepAR and immediately restore the existing local live renderer so a stale wrong effect is never visible.
+- `DEEPAR_EFFECT_URL` may point to a licensed effect for the isolated smoke test only. The default test uses the SDK's bundled sample effect.
+- Do not represent successful SDK loading as successful hairstyle replacement; the license and engine do not convert PNG or GLB assets into DeepAR effects.
+- Do not modify or route Optional AI Photo through DeepAR. Keep `/api/ai-render`, its capture flow, and its existing model inputs unchanged.
 
+### DeepAR hairstyle export handoff (2026-09-21)
+
+All eight base hairstyle effects are exported from their own imported GLB and installed in `public\assets\deepar\effects\`. The shared base effect for each style serves all five color selections through the `MeshRenderer` material color uniform, so `/api/deepar-config` reports 40 configured looks when the DeepAR key is available.
+
+- Editable Studio projects: `assets-source\deepar-studio-input\<style>.deeparproj`; Bob uses `Bob_f.deeparproj`. DeepAR Studio 4.5.2.139 is installed at `C:\Program Files\DeepAR Studio\deepar_studio.exe`.
+- App effects: `bob.deepar`, `feather.deepar`, `v-cut.deepar`, `u-cut.deepar`, `crew-cut.deepar`, `buzz-cut.deepar`, `curtain-bangs.deepar`, and `skin-fade.deepar`. Every package has a distinct SHA-256 hash and contains its style's own Studio-imported mesh and material resources.
+- Corrected Hair-node transforms use identity rotation and uniform scale. Bob `[0, -45, -8.7]`, scale `7.5`; Feather `[-0.45, -44.55, -8.85]`, scale `7.5`; V Cut `[0, -43.5, -8.85]`, scale `7.5`; U Cut `[0, -43.5, -8.85]`, scale `7.5`; Crew Cut `[0, -65.125, -11.13]`, scale `8.5`; Buzz Cut `[0, -61.98, -10.62]`, scale `8.5`; Curtain Bangs `[0.255, -53.055, -10.28]`, scale `8.5`; Skin Fade `[0, -57.56, -10.45]`, scale `8.5`.
+- The old copied Bob transform `[15.0088615, -9.0701027, 8.1312523]`, tilted rotation, and nonuniform scale caused the hair to float above the face. Do not restore it. The corrected values were calibrated against each source GLB's bounds and the Studio head reference.
+- Export source mapping: `BOB_final.deepar` to `bob.deepar`, `feather.deepar`, `V-cutv.deepar` to `v-cut.deepar`, `u-cut.deepar`, `crew-cut.deepar`, `epbuzz-cut.deepar` to `buzz-cut.deepar`, `curtainbang.deepar` to `curtain-bangs.deepar`, and `skinfade.deepar` to `skin-fade.deepar`. The `epbuzz-cut` name was a native Save-dialog artifact; it is the final Buzz build exported from the corrected project.
+- Temporary Studio helpers remain in `C:\Users\DELL\AppData\Local\Temp\mirrorly-deepar-reference-20260920\`: `Send-StudioFileDrop.ps1`, `Link-StudioHair.ps1`, and `Studio-Interact.ps1`. Studio export dialogs may require scrolling before the final Export button appears. Confirm the foreground process before GUI automation because the user's desktop may be active.
+- Use `http://localhost:4173/` for the licensed camera test. The current license rejects `127.0.0.1`; `public/index.html` redirects that hostname to `localhost` before DeepAR starts. A DeepAR watermark is controlled by the DeepAR license tier and is separate from mesh alignment.
+- Keep the editable project directories as local working sources unless the user explicitly requests committing their large generated caches. Commit the compiled app effects and this reproducible transform record. For future fitting, change one style's `Hair` node only, reopen the saved project, inspect against the Studio head, export, replace its app file, and rerun the DeepAR tests.
+- Studio head-reference calibration is complete. A final real-camera review should check frontal fit and moderate yaw on more than one person before production sign-off; hairstyle geometry cannot guarantee identical hairline coverage for every head shape.
+- Validation on 2026-09-22 passed `npm run check`, all 35 unit tests, and the Edge/WebGL browser suite. The running licensed configuration reported 40 of 40 looks across eight unique base effects.
 ## Git repository and safe publishing
 
 Keep the Git repository scoped to `MirrorlyLaptopApp/`. The configured remote is:
@@ -257,6 +268,7 @@ Do not overwrite non-empty remote history without first fetching and reconciling
 - Preserve the dark teal and warm-gold salon presentation.
 - Keep live AI AR primary and Optional AI photo secondary. Local camera/tracking, style/color selection, pause/restart, and saving work without optional-photo capture; creating personalized live AI hair explicitly uploads one frozen frame.
 - Keep women's and men's style labels in the two-column selector.
+- Keep hairstyle thumbnails free of AI LIVE badges. In demo mode only, use the bundled fictional photographic male portrait for men's cuts and female portrait for women's cuts; switch the main portrait and use each card's own category portrait. `demoProfiles` fits these fixed assets, not customer faces. Never replace a real camera/captured portrait based on the selected category, infer a customer's gender, or make paid demo-generation requests. Source images and prompts are documented under `public/assets/demo/`.
 - Keep the control panel scrollable so all eight styles and five colors remain reachable.
 - Keep the customer-facing flow limited to Step 1 (style) and Step 2 (color); do not restore the Step 3 fit-control section unless the user explicitly requests it.
 - Keep the header count synchronized with the catalog.
@@ -272,7 +284,7 @@ After code or asset changes:
 2. Confirm `/`, `app.js`, every referenced hairstyle PNG, and every configured GLB return HTTP 200.
 3. Open `/3d-smoke-test.html` and confirm all eight labeled GLB meshes load and rotate before testing the camera.
 4. Open a cache-busted URL in Edge.
-5. Start the live mirror and confirm local tracking starts but the customer view stays camera-only. Create AI hair explicitly; reveal it only after decoding/segmentation. Verify AI LIVE badges, generation/failure waiting behavior, and suppression of catalog GLB/PNG output.
+5. Confirm hairstyle-card badges are absent and the photographic demo switches male/female portraits with the cut category, including category-specific side cards. Start the live mirror and confirm local tracking starts but the customer view stays camera-only. Create AI hair explicitly; reveal it only after decoding/segmentation. Verify generation/failure waiting behavior and suppression of catalog GLB/PNG output.
 6. Move the test face and verify the pose changes while tracking stays active; confirm the multi-landmark anchor remains stable during translation, scale, roll, yaw, and pitch changes.
 7. Verify generated room pixels are absent from hair textures. Keep the bounded repair separate, screen-anchored, and faded during movement. Foreground strands follow the measured face contour, rear pixels are occluded, eyes remain natural, long ends are not clipped by a fixed ROI, and hair fades during excessive turns. Live camera RGB must not receive cinematic shading.
 8. Check all five colors on at least one short and one long hairstyle.
@@ -284,6 +296,8 @@ After code or asset changes:
 
 ## Known limitations
 
+- The bundled photographic demo still uses static transparent hairstyle PNG compositing. Review on 2026-09-14 found magenta edge contamination on Feather Cut and visible teal/ear gaps where transparent hair is layered over the portrait instead of inpainted into it. Curtain Bangs is also oversized and too voluminous for its men's-style label, even with demo-only scaling. Treat these as catalog-asset defects, not portrait-category switching or live-tracker errors.
+- Before claiming photographic demo quality, replace or despill the affected cuts with clean-alpha, hair-only assets and recalibrate their demo-only profiles against both bundled portraits. Do not hide edge defects with a dark wash or heavy blur, and do not change customer/live calibration to compensate for fixed demo assets.
 - Captured-photo alignment is guide-based when measurement is unavailable; the primary Live AI AR path uses the bundled MediaPipe tracker.
 - The local Hair Segmenter isolates generated live hair and the face-depth occluder handles front/back ordering, but fine ear-level occlusion and strand-level geometry are still approximate. The optional AI photo handles final photographic blending when billing is available.
 - GPT Image editing is intentionally not called per video frame; live movement comes from local MediaPipe tracking plus Three.js rendering.

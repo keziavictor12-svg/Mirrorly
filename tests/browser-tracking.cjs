@@ -14,7 +14,7 @@ assert.ok(edge, 'Edge is required for this integration test');
 const source = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
 const catalogContext = {};
 vm.runInNewContext(source.slice(source.indexOf('const hairstyles = '), source.indexOf('const pngPreferredLiveStyles')) + '\nglobalThis.catalog = hairstyles;', catalogContext);
-const browser = spawn(edge, ['--headless=new', '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, 'http://127.0.0.1:4173/'], { windowsHide: true, stdio: 'ignore' });
+const browser = spawn(edge, ['--headless=new', '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, 'http://localhost:4173/'], { windowsHide: true, stdio: 'ignore' });
 const pending = new Map();
 let socket;
 let id = 0;
@@ -40,7 +40,7 @@ async function main() {
   let page;
   while (!page) {
     const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    page = pages.find((p) => p.type === 'page' && p.url.startsWith('http://127.0.0.1:4173/'));
+    page = pages.find((p) => p.type === 'page' && p.url.startsWith('http://localhost:4173/'));
     if (!page) await delay(150);
     assert.ok(Date.now() < deadline, 'Mirrorly page did not open');
   }
