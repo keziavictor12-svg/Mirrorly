@@ -311,12 +311,18 @@ function currentLookKey() {
 async function activateLocalLiveRenderer(message) {
   window.MirrorlyDeepAR?.pause();
   state.deepArActive = false;
+  state.deepArSwitching = false;
+  state.deepArSwitchVersion += 1;
   if (deepArRoot) deepArRoot.hidden = true;
   await window.MirrorlyAR.initialize(arCanvas, video);
   state.arReady = true;
   syncArHair();
   window.MirrorlyAR.setEnabled(true);
+  window.MirrorlyAR.prepareHairSegmentation?.().catch(() => {});
   arCanvas.hidden = true;
+  liveArButton.textContent = 'Pause live AI AR';
+  cameraStatus.textContent = 'Live AI AR active';
+  privacyStatus.textContent = 'Live tracking is local; one frame uploads only when AI hair is requested';
   trackingHint.textContent = message;
   updateLiveAiHairButton();
 }
@@ -357,10 +363,14 @@ function usesTrue3dLive(style) {
 
 function updateLiveAiHairButton() {
   if (state.deepArActive) {
-    liveAiHairButton.disabled = true;
-    liveAiHairButton.classList.add('active');
-    liveAiHairButton.textContent = 'Depth hairstyle AR active';
-    liveAiHairButton.title = 'The matching DeepAR hairstyle effect is rendering live';
+    liveAiHairButton.disabled = !state.liveAr || !state.aiAvailable || state.liveAiHairGenerating;
+    liveAiHairButton.classList.remove('active');
+    liveAiHairButton.textContent = state.liveAiHairGenerating
+      ? 'Preparing AI replacement...'
+      : 'Replace real hair with AI';
+    liveAiHairButton.title = state.aiAvailable
+      ? 'Capture one frame and replace the existing hair with the selected cut and color'
+      : 'Configure OpenAI API access to replace the existing hair';
     return;
   }
   const active = Boolean(state.liveAiHair && state.liveAiHairKey === currentLookKey());
@@ -1105,6 +1115,25 @@ function createHiddenLivePlacement(capture) {
   return createAiUploadDataUrl(placement, 'jpeg');
 }
 
+function waitForLocalFaceTracking(timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+    const check = () => {
+      const status = window.MirrorlyAR?.getStatus();
+      if (status?.tracking && status.pose?.faceWidth) {
+        resolve(status);
+        return;
+      }
+      if (!state.liveAr || state.deepArActive || performance.now() - startedAt >= timeoutMs) {
+        resolve(null);
+        return;
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
 async function createLiveAiHair() {
   if (state.liveAiHairGenerating) return;
   if (!state.liveAr || video.readyState < 2) {
@@ -1115,7 +1144,29 @@ async function createLiveAiHair() {
     showToast('OpenAI API access is required for AI hair generation');
     return;
   }
-  const arStatus = window.MirrorlyAR?.getStatus();
+  let arStatus;
+  if (state.deepArActive) {
+    state.liveAiHairGenerating = true;
+    state.liveAiHairStartedAt = Date.now();
+    updateLiveAiHairButton();
+    trackingHint.textContent = 'Preparing local face tracking for AI hair replacement';
+    try {
+      await activateLocalLiveRenderer('Hold still and face forward while local tracking starts');
+      arStatus = await waitForLocalFaceTracking();
+    } catch (error) {
+      console.error('Mirrorly AI replacement handoff failed', error);
+    } finally {
+      state.liveAiHairGenerating = false;
+      updateLiveAiHairButton();
+    }
+    if (!arStatus) {
+      trackingHint.textContent = 'Camera ready - hold your face in view and retry AI replacement';
+      showToast('Face tracking was not ready; hold still and try again');
+      return;
+    }
+  } else {
+    arStatus = window.MirrorlyAR?.getStatus();
+  }
   if (!arStatus?.tracking || !arStatus.pose?.faceWidth) {
     showToast('Hold your face in view, then try again');
     return;

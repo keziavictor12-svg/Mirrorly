@@ -445,6 +445,20 @@ async function main() {
         || typeof window.MirrorlyDeepAR.getCanvas !== 'function') {
         throw new Error('DeepAR provider adapter is not available to the main Mirrorly page');
       }
+      const previousLiveAr = state.liveAr;
+      const previousDeepAr = state.deepArActive;
+      const previousAiAvailable = state.aiAvailable;
+      state.liveAr = true;
+      state.deepArActive = true;
+      state.aiAvailable = true;
+      updateLiveAiHairButton();
+      if (liveAiHairButton.disabled || liveAiHairButton.textContent !== 'Replace real hair with AI') {
+        throw new Error('DeepAR does not offer the AI hair replacement handoff');
+      }
+      state.liveAr = previousLiveAr;
+      state.deepArActive = previousDeepAr;
+      state.aiAvailable = previousAiAvailable;
+      updateLiveAiHairButton();
       return { passed: true, checks, glError, occluder: stale.metrics.occluder, modelFallback: true, layeredFallback: true, ghostPixels: 0,
         aiTextureOrientation: true, originalHairRepair: true, foregroundMask: true, aiOnlyPreview: true,
         foreheadContour: true, longHairExtent: true, croppedEdgeFade: true, repairMotionFade: true,
@@ -452,7 +466,7 @@ async function main() {
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
         numericAiTimings: true, referencePngBytes, referenceJpegBytes,
         demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
-        deepArAdapter: true };
+        deepArAdapter: true, deepArAiReplacement: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);

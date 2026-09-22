@@ -240,6 +240,7 @@ All eight base hairstyle effects are exported from their own imported GLB and in
 - Imported PBR materials expose their runtime tint as `u_diffuse`. `deepar-config.cjs` must try `Hair/u_diffuse` and the historical misspelling `Har/u_diffuse` before compatibility fallbacks. The selected color is applied after every effect switch.
 - The depth-only head occluder uses `Material.mat` with `writeColor=false` and `writeDepth=true`. Do not replace it with visible `lambert1.mat`.
 - A tracked 3D hair mesh can cover and occlude parts of the face, but it cannot remove the customer's real hair or reconstruct the background hidden by long hair. Short cuts on a person with long hair will still show the real hair outside the mesh. Use the AI replacement flow when the preview must erase or replace existing hair.
+- While DeepAR is active, keep `Replace real hair with AI` available when the AI endpoint is configured. Its first click must pause and hide DeepAR, initialize the local MediaPipe tracker against the same camera video, wait briefly for a forward-facing tracked pose, and then run the existing one-frame `/api/ai-ar-hair` flow. After generation, the locally tracked AI hair and background-repair layers replace the 3D effect. Do not stack DeepAR and the AI replacement or upload continuously.
 ## Git repository and safe publishing
 
 Keep the Git repository scoped to `MirrorlyLaptopApp/`. The configured remote is:
