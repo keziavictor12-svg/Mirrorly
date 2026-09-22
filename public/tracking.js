@@ -233,6 +233,11 @@
         if (pixelX <= b.x) break;
       }
     }
+    // A generated photograph should remain mostly photographic. Retain only a
+    // small amount of measured temple curvature in realism-first mode instead
+    // of bending the entire texture like a rigid 3D sheet.
+    const depthStrength = clamp(attachment.depthStrength ?? 1, 0, 1);
+    pixelDepth = depth + (pixelDepth - depth) * depthStrength;
     const point = [
       (pixelX - headX) / faceWidth,
       (crop.y + v * crop.height - headY) / faceWidth,
@@ -252,7 +257,9 @@
     const relative = rotatePoint(pose.quaternion,
       rotatePoint([-attachment.quaternion[0], -attachment.quaternion[1], -attachment.quaternion[2], attachment.quaternion[3]], [0, 0, 1]));
     const angle = Math.acos(clamp(relative[2], -1, 1));
-    return clamp((0.78 - angle) / 0.17, 0, 1);
+    const fadeStart = attachment.viewFadeStart ?? 0.61;
+    const fadeEnd = Math.max(fadeStart + 1e-6, attachment.viewFadeEnd ?? 0.78);
+    return clamp((fadeEnd - angle) / (fadeEnd - fadeStart), 0, 1);
   }
 
   function backgroundRepairOpacity(pose, attachment) {
@@ -266,7 +273,11 @@
       const t = clamp((value - start) / (end - start), 0, 1);
       return 1 - t * t * (3 - 2 * t);
     };
-    return Math.min(fade(travel, 0.025, 0.12), fade(zoom, 0.025, 0.10), fade(angle, 0.035, 0.18));
+    return Math.min(
+      fade(travel, attachment.repairTravelStart ?? 0.025, attachment.repairTravelEnd ?? 0.12),
+      fade(zoom, attachment.repairZoomStart ?? 0.025, attachment.repairZoomEnd ?? 0.10),
+      fade(angle, attachment.repairAngleStart ?? 0.035, attachment.repairAngleEnd ?? 0.18)
+    );
   }
 
   function shouldDisplayAiHair(liveState, lookKey) {

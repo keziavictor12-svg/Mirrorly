@@ -105,13 +105,15 @@ async function main() {
       window.MirrorlyAR.setEnabled(true);
       if (window.MirrorlyAR.getStatus(now).tracking) throw new Error('Tracking started before detection');
       const checks = [];
+      const modelEvents = [];
+      window.addEventListener('mirrorly-ar-model', event => modelEvents.push(event.detail));
       for (const style of catalog) {
         const image = new Image(); image.src = style.asset; await image.decode();
         window.MirrorlyAR.setHair(image, style, { value: '#70432f' });
         frame(0);
         const until = performance.now() + 10000;
         while (window.MirrorlyAR.getStatus(now).renderMode !== '3d') {
-          if (performance.now() > until) throw new Error(style.id + ' failed to load as 3D');
+          if (performance.now() > until) throw new Error(style.id + ' failed to load as 3D: ' + JSON.stringify({ status: window.MirrorlyAR.getStatus(now).styleId, events: modelEvents.slice(-4) }));
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
         for (let i = 0; i < 30; i++) frame(0.6, 650);
@@ -388,19 +390,80 @@ async function main() {
       window.MirrorlyAR.setEnabled(false);
       if (window.MirrorlyAR.getStatus(now).tracking) throw new Error('Pause still reports tracking');
       window.MirrorlyAR.dispose();
+      state.arReady = false; state.liveAr = false; state.liveAiHair = null; state.aiResult = null;
+      if (styleGrid.querySelector('.true-3d-badge, em') || [...styleGrid.querySelectorAll('button')].some(b => /AI LIVE|LIVE AR|TRUE 3D/.test(b.textContent))) throw new Error('Hairstyle card badges remain visible');
+      await Promise.all([...demoImages.values()].map(image => image.decode()));
+      await Promise.all([...hairImages.values()].map(image => image.decode()));
+      const review = document.createElement('canvas'); review.width = 1920; review.height = 720;
+      const reviewContext = review.getContext('2d');
+      const selectedBeforeDemo = state.style;
+      state.aiAvailable = false;
+      startDemo();
+      const cards = [...styleGrid.querySelectorAll('button')];
+      const demoCategories = [];
+      for (const [index, style] of hairstyles.entries()) {
+        cards[index].click();
+        const expected = style.category === "Men's styles" ? 'male' : 'female';
+        if (getDemoCategory() !== expected || document.querySelector('#previewCanvas').dataset.demoCategory !== expected) throw new Error('Demo did not switch category for ' + style.id);
+        const layout = getDemoPhotoLayout(state.capturedFrame);
+        if (!layout || layout.image !== demoImages.get(expected) || !state.detection?.mirrored) throw new Error('Demo portrait or measured fit missing');
+        const main = document.querySelector('#previewCanvas');
+        drawDemoScene(); drawPhotorealisticHair();
+        if (['crew-cut', 'buzz-cut', 'skin-fade'].includes(style.id)) {
+          for (const eyeX of [0.442, 0.55]) {
+            const x = Math.round(main.width * eyeX), y = Math.round(main.height * 0.318);
+            const original = state.capturedFrame.getContext('2d').getImageData(x, y, 1, 1).data;
+            const shown = main.getContext('2d').getImageData(x, y, 1, 1).data;
+            if ([0, 1, 2].some(c => Math.abs(original[c] - shown[c]) > 10)) throw new Error('Short demo hair covers an eye: ' + style.id);
+          }
+        }
+        if (['bob', 'feather', 'crew-cut', 'buzz-cut', 'skin-fade'].includes(style.id)) {
+          const x = Math.round(main.width * 0.5), y = Math.round(main.height * (expected === 'male' ? 0.12 : 0.14));
+          const original = state.capturedFrame.getContext('2d').getImageData(x, y, 1, 1).data;
+          const shown = main.getContext('2d').getImageData(x, y, 1, 1).data;
+          if ([0, 1, 2].reduce((sum, c) => sum + Math.abs(original[c] - shown[c]), 0) < 60) throw new Error('Demo scalp remains exposed: ' + style.id);
+        }
+        reviewContext.drawImage(main, (index % 4) * 480, Math.floor(index / 4) * 360, 480, 360);
+        const preview = stylePreviewCanvases.get(style.id);
+        if (preview.hidden || !preview.getContext('2d').getImageData(90, 55, 1, 1).data[3]) throw new Error('Category demo card is blank');
+        demoCategories.push({ style: style.id, category: expected });
+      }
+      window.MirrorlyDemoReview = review;
+      state.demo = false; state.active = false; state.captured = false;
+      const realCapture = document.createElement('canvas'); realCapture.width = 960; realCapture.height = 720;
+      state.capturedFrame = realCapture;
+      cards[0].click(); cards[4].click();
+      if (state.capturedFrame !== realCapture) throw new Error('Selecting a category replaced a real captured portrait');
+      state.capturedFrame = null; state.detection = null; state.style = selectedBeforeDemo;
       const gl = canvas.getContext('webgl2');
       const glError = gl?.getError();
       if (glError !== 0) throw new Error('WebGL error ' + glError);
+      if (!window.MirrorlyDeepAR
+        || typeof window.MirrorlyDeepAR.start !== 'function'
+        || typeof window.MirrorlyDeepAR.applyLook !== 'function'
+        || typeof window.MirrorlyDeepAR.pause !== 'function'
+        || typeof window.MirrorlyDeepAR.getCanvas !== 'function') {
+        throw new Error('DeepAR provider adapter is not available to the main Mirrorly page');
+      }
       return { passed: true, checks, glError, occluder: stale.metrics.occluder, modelFallback: true, layeredFallback: true, ghostPixels: 0,
         aiTextureOrientation: true, originalHairRepair: true, foregroundMask: true, aiOnlyPreview: true,
         foreheadContour: true, longHairExtent: true, croppedEdgeFade: true, repairMotionFade: true,
         liveCameraUnshaded: true, canonicalVertices: canonicalPoints.length, styleMasks,
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
-        numericAiTimings: true, referencePngBytes, referenceJpegBytes };
+        numericAiTimings: true, referencePngBytes, referenceJpegBytes,
+        demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
+        deepArAdapter: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   assert.equal(result.result?.value?.passed, true);
+  if (process.env.MIRRORLY_DEMO_REVIEW === '1') {
+    const demo = await send('Runtime.evaluate', { expression: 'window.MirrorlyDemoReview.toDataURL("image/png")', returnByValue: true });
+    const previewDir = fs.mkdtempSync(path.join(root, '.edge-demo-review-'));
+    const previewFile = path.join(previewDir, 'demo-review.png');
+    fs.writeFileSync(previewFile, Buffer.from(demo.result.value.split(',')[1], 'base64'));
+    console.log('Demo review: ' + previewFile);
+  }
   console.log(JSON.stringify(result.result.value, null, 2));
 }
 

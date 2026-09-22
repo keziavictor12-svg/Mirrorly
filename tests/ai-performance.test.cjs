@@ -10,7 +10,9 @@ const { Readable } = require('node:stream');
 function loadServer(apiAvailable = true) {
   const calls = [];
   const context = {
-    require: name => name === 'node:http' ? { createServer: () => ({ listen() {} }) } : require(name),
+    require: name => name === 'node:http'
+      ? { createServer: () => ({ listen() {} }) }
+      : (name.startsWith('./') ? require(path.resolve(__dirname, '..', name)) : require(name)),
     __dirname: path.resolve(__dirname, '..'), Buffer, FormData, Blob, AbortSignal, performance,
     process: { env: apiAvailable ? { OPENAI_API_KEY: 'synthetic-test-only' } : {} },
     console: { log() {}, error() {} },
@@ -79,7 +81,16 @@ for (const endpoint of ['renderAiHairstyle', 'renderLiveAiHairLayer']) {
     assert.equal(images.length, 3);
     assert.deepEqual(images.map(image => image.type), ['image/png', 'image/jpeg', 'image/jpeg']);
     assert.ok(images[1].name.endsWith('.jpg'));
-    if (endpoint === 'renderLiveAiHairLayer') assert.equal(form.get('mask').type, 'image/png');
+    if (endpoint === 'renderLiveAiHairLayer') {
+      assert.equal(form.get('mask').type, 'image/png');
+      assert.match(images[1].name, /^synthetic-placement-geometry-guide\./);
+      assert.match(images[2].name, /^synthetic-cut-shape-guide\./);
+      const prompt = form.get('prompt');
+      assert.match(prompt, /synthetic geometry guides only/);
+      assert.match(prompt, /real human hair photographed by the same webcam/);
+      assert.match(prompt, /must not look like CGI, a 3D render/);
+      assert.match(prompt, /exact original coordinate system/);
+    }
     assert.ok(response.payload.image.startsWith('data:image/jpeg;base64,'));
     assert.equal(response.payload.outputSize, '1088x608');
     assert.deepEqual(Object.keys(response.payload.timings).sort(), ['apiMs', 'preparationMs', 'totalMs']);

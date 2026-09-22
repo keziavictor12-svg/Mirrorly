@@ -184,6 +184,20 @@ test('measured temple depths curve the AI strip while preserving capture pixels'
   }
 });
 
+test('realism-first AI attachment keeps only subtle photographic curvature', () => {
+  const attachment = {
+    crop: { x: 500, y: 130, width: 200, height: 420 },
+    headX: 600, headY: 350, faceWidth: 200, depth: 80, depthStrength: 0.12,
+    quaternion: [0, 0, 0, 1],
+    depthSamples: [{ x: 500, depth: 0 }, { x: 600, depth: 80 }, { x: 700, depth: 0 }]
+  };
+  const pose = { x: 600, y: 350, faceWidth: 200, quaternion: [0, 0, 0, 1] };
+  const edge = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0, 0.3), pose);
+  const crown = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0.5, 0.3), pose);
+  assert.ok(Math.abs(edge[2] - 70.4) < 1e-8);
+  assert.ok(Math.abs(crown[2] - 80) < 1e-8);
+});
+
 test('customer live preview never shows catalog hair or a pending/stale AI result', () => {
   const ready = { liveAr: true, showOverlay: true, liveAiHairGenerating: false, liveAiHair: {}, liveAiHairKey: 'bob:brown' };
   assert.equal(tracking.shouldDisplayAiHair(ready, 'bob:brown'), true);
@@ -198,6 +212,15 @@ test('single-view AI hair hides at large turns without hiding pure roll', () => 
   assert.equal(tracking.aiViewOpacity(pose(new THREE.Vector3(0, 1, 0), 0), attachment), 1);
   assert.equal(tracking.aiViewOpacity(pose(new THREE.Vector3(0, 1, 0), 0.9), attachment), 0);
   assert.equal(tracking.aiViewOpacity(pose(new THREE.Vector3(0, 0, 1), 0.9), attachment), 1);
+});
+
+test('realism-first AI hair fades outside a narrow front-facing range', () => {
+  const attachment = { quaternion: [0, 0, 0, 1], viewFadeStart: 10 * Math.PI / 180, viewFadeEnd: 15 * Math.PI / 180 };
+  const pose = (degrees) => ({ quaternion: new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0), degrees * Math.PI / 180).toArray() });
+  assert.equal(tracking.aiViewOpacity(pose(8), attachment), 1);
+  assert.ok(tracking.aiViewOpacity(pose(12), attachment) > 0 && tracking.aiViewOpacity(pose(12), attachment) < 1);
+  assert.equal(tracking.aiViewOpacity(pose(16), attachment), 0);
 });
 
 test('AI matte fills small crown gaps without filling the face or outer silhouette', () => {
@@ -228,6 +251,20 @@ test('frozen background repairs fade on tilt, translation and scale without hidi
   assert.equal(tracking.backgroundRepairOpacity({ ...pose, faceWidth: 230 }, attachment), 0);
   const fading = tracking.backgroundRepairOpacity({ ...pose, x: 614.5 }, attachment);
   assert.ok(Math.abs(fading - 0.5) < 1e-8, 'repair does not fade smoothly');
+});
+
+test('realism-first frozen repair disappears before the photographic hair layer', () => {
+  const attachment = {
+    headX: 600, headY: 350, faceWidth: 200, quaternion: [0, 0, 0, 1],
+    viewFadeStart: 10 * Math.PI / 180, viewFadeEnd: 15 * Math.PI / 180,
+    repairTravelStart: 0.008, repairTravelEnd: 0.045,
+    repairZoomStart: 0.012, repairZoomEnd: 0.055,
+    repairAngleStart: 0.018, repairAngleEnd: 0.075
+  };
+  const turned = { x: 600, y: 350, faceWidth: 200, quaternion: new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0), 0.08).toArray() };
+  assert.equal(tracking.backgroundRepairOpacity(turned, attachment), 0);
+  assert.equal(tracking.aiViewOpacity(turned, attachment), 1);
 });
 
 test('head-connected hair keeps long tails and excludes unrelated background hair', () => {

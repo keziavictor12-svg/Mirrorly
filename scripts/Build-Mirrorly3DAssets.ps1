@@ -57,7 +57,7 @@ function New-HairVariant {
         [Parameter(Mandatory = $true)][string]$SourcePath,
         [Parameter(Mandatory = $true)][string]$DestinationPath,
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Copy", "V", "U", "Buzz", "Curtain", "Fade")]
+        [ValidateSet("Copy", "Feather", "V", "U", "Buzz", "Curtain", "Fade")]
         [string]$Shape
     )
 
@@ -98,6 +98,17 @@ function New-HairVariant {
         $z = [double]::Parse($parts[3], $invariant)
 
         switch ($Shape) {
+            "Feather" {
+                # Extend the clean bob topology to shoulder length and gently
+                # flare the lower strands. The former high-poly Feather source
+                # imported as a tangled mesh in DeepAR Studio.
+                if ($y -lt 7.10) {
+                    $lowerRatio = [Math]::Min(1.0, [Math]::Max(0, (7.10 - $y) / 1.57))
+                    $y = 7.10 + ($y - 7.10) * 1.35
+                    $x *= 1.0 + 0.20 * $lowerRatio
+                    $z += 0.05 * $lowerRatio
+                }
+            }
             "V" {
                 if ($y -lt 2.45) {
                     $xRatio = [Math]::Min(1.0, [Math]::Abs($x) / 1.2707)
@@ -122,12 +133,12 @@ function New-HairVariant {
                 $z = 0.35 + ($z - 0.35) * 0.94
             }
             "Curtain" {
-                if ($z -gt 0.55 -and $y -lt 7.55 -and [Math]::Abs($x) -lt 0.32) {
-                    $falloff = 1 - [Math]::Abs($x) / 0.32
+                if ($z -gt 0.55 -and $y -lt 7.55 -and [Math]::Abs($x) -lt 0.38) {
+                    $falloff = 1 - [Math]::Abs($x) / 0.38
                     $side = if ($x -lt 0) { -1 } else { 1 }
-                    $x += $side * 0.16 * $falloff
-                    $y += 0.72 * $falloff
-                    $z += 0.04 * $falloff
+                    # Open a gentle center part without lifting the center vertices.
+                    # The old 0.72 Y displacement folded the mesh into a visible spike.
+                    $x += $side * 0.10 * $falloff
                 }
             }
             "Fade" {
@@ -155,7 +166,7 @@ Convert-HairModel -SourcePath (Join-Path $bobRoot "bob_curled_under.obj") -Desti
 Convert-HairModel -SourcePath (Join-Path $sourceRoot "short01\short01.obj") -DestinationPath (Join-Path $outputRoot "short-cc0.glb")
 
 $variants = @(
-    @{ Root = $ccBySourceRoot; Folder = "o4saken_long01"; Source = "o4saken_long01.obj"; Prepared = "feather-mirrorly.obj"; Shape = "Copy"; Output = "feather-cc-by.glb" },
+    @{ Folder = "toigo_curled_under_bob"; Source = "bob_curled_under.obj"; Prepared = "feather-mirrorly.obj"; Shape = "Feather"; Output = "feather-cc0.glb" },
     @{ Folder = "long01"; Source = "long01.obj"; Prepared = "v-cut-mirrorly.obj"; Shape = "V"; Output = "v-cut-cc0.glb" },
     @{ Folder = "long01"; Source = "long01.obj"; Prepared = "u-cut-mirrorly.obj"; Shape = "U"; Output = "u-cut-cc0.glb" },
     @{ Folder = "short02"; Source = "short02.obj"; Prepared = "buzz-cut-mirrorly.obj"; Shape = "Buzz"; Output = "buzz-cut-cc0.glb" },
@@ -173,7 +184,7 @@ foreach ($variant in $variants) {
 
 $modelNames = @(
     "bob-cc0.glb",
-    "feather-cc-by.glb",
+    "feather-cc0.glb",
     "v-cut-cc0.glb",
     "u-cut-cc0.glb",
     "short-cc0.glb",

@@ -28,6 +28,24 @@ Both Live AI hair and Optional AI Photo retain medium quality and all three refe
 
 Twenty seconds is a target, not a guaranteed or measured completion time. The local segmenter warms without making an API call; no automatic paid retries are added. Session-only numeric timings are available at `MirrorlyAiDiagnostics.getMetrics()`. Restart the Node server after backend updates: refreshing an old server can cause a JPEG preview to be rejected as "must be a PNG image".
 
+## DeepAR integration
+
+DeepAR Web SDK 5.6.22 is installed locally and wired into Mirrorly's existing camera flow. It reuses the current video element, loads the exact effect matching the selected style/color, switches effects without replacing the salon UI, pauses with Live AR, and supports local snapshots. Validate the SDK, license, camera, and bundled test effect independently at `http://localhost:4173/deepar-test.html`.
+
+The DeepAR Web license is read from the ignored local environment file or the server environment. Browser license keys are necessarily delivered to the Web SDK, but the value must never be committed, printed, or placed in documentation.
+
+```powershell
+$env:DEEPAR_LICENSE_KEY='your-web-sdk-license-key'
+$env:DEEPAR_EFFECT_URL='/assets/deepar/effects/your-test-effect.deepar' # isolated smoke test only
+npm start
+```
+
+Place eight exported DeepAR Studio hairstyle effects under `public/assets/deepar/effects/` as `bob.deepar`, `feather.deepar`, `v-cut.deepar`, `u-cut.deepar`, `crew-cut.deepar`, `buzz-cut.deepar`, `curtain-bangs.deepar`, and `skin-fade.deepar`. Each project must expose a visible mesh node named `Hair` using `MeshRenderer`. Imported PBR materials use the `u_diffuse` vec4 uniform for runtime color; the adapter also tries `u_baseColorFactor` and `u_color` for compatible custom shaders. The older 8 x 5 color-specific filenames remain supported as overrides. Mirrorly activates DeepAR only for selections with an installed effect and immediately uses the local renderer for missing looks, preventing a stale effect from remaining visible.
+
+The supplied DeepAR free package is available in the isolated sample lab when its effects are installed under `public/assets/deepar/samples/`. They can be switched live at `http://localhost:4173/deepar-test.html`. They are intentionally not assigned to salon choices because the package contains masks, makeup, backgrounds, particles, and novelty head effects. The original package includes reusable FBX models, textures, shaders, and a script, but no `.deeparproj` project; use DeepAR Studio's Import Effect or asset workflow to modify a sample and export a new `.deepar` file.
+
+The local server exposes the installed SDK under `/vendor/deepar/`. `GET /api/deepar-config` supplies same-origin browser configuration and readiness counts. This integration does not change the OpenAI key, `/api/ai-render`, or Optional AI Photo behavior.
+
 ## Included in this first build
 
 - Local laptop webcam preview
@@ -38,8 +56,9 @@ Twenty seconds is a target, not a guaranteed or measured completion time. The lo
 - Automatic captured-face measurement using the bundled 478-point model, including face center, size, and roll
 - Optional GPT Image 2 still rendering that receives the original portrait, AR placement preview, and selected hairstyle reference, then replaces and blends the hair as photographic pixels
 - Eight salon cuts: Bob, Feather, V Cut, U Cut, Crew Cut, Buzz Cut, Curtain Bangs, and Skin Fade
+- Realistic bundled male/female demo portraits that switch with the hairstyle category; no AI LIVE labels on hairstyle cards. Camera and captured customer photos are never swapped by category.
 - A textured volumetric catalog GLB for every cut, retained for internal validation but not shown as the customer-facing fallback
-- Personalized AI live hair with capture-pose head anchoring, measured foreground contour/depth, and a separate motion-faded original-hair repair
+- Personalized AI live hair with capture-pose head anchoring, measured foreground contour/depth, a separate motion-faded original-hair repair, and webcam-matched strand/lighting instructions that explicitly reject a CGI or plastic 3D-render finish
 - Side-card previews showing the captured face with every hairstyle
 - Five common salon hair-colour choices
 - Automatic hairstyle alignment using the bundled MediaPipe face measurement
@@ -54,7 +73,7 @@ Twenty seconds is a target, not a guaranteed or measured completion time. The lo
 
 The tracker fits head position/scale using pose-projected canonical landmarks and quaternion filtering. Its 468-landmark depth occluder seals eye/mouth holes so rear hair cannot leak through them. The personalized AI layer undoes the captured pose and attaches to the current head origin on a subdivided, measured-depth strip, preserving crop offsets and image orientation. Both the renderer and compositor suppress temporary catalog hair, pending AI, and mismatched looks. Diagnostics are available through `MirrorlyAR.getStatus().metrics` without exposing camera pixels. Pose rendering follows the [MediaPipe transformation-matrix model](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker).
 
-Run `npm test` for 28 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
+Run `npm test` for 35 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
 
 The foreground mask now follows the captured landmark face contour instead of a generic oval. Head-connected semantic hair retains its full length; generated-image borders receive a localized alpha fade when clipped. Hair and background repairs are separate: frozen room pixels stay at capture-screen coordinates and fade with head motion instead of forming dark rotating patches. Live camera pixels receive no cinematic wash or vignette. Regressions use an attributed generic 468-vertex canonical model, not customer photographs.
 

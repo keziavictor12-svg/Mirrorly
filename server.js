@@ -1,10 +1,30 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { getDeepArConfiguration } = require("./deepar-config.cjs");
+
+function loadLocalEnvironment(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  for (const rawLine of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator < 1) continue;
+    const name = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!(name in process.env)) process.env[name] = value;
+  }
+}
+
+loadLocalEnvironment(path.join(__dirname, ".env.local"));
 
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4173);
 const publicDir = path.join(__dirname, "public");
+const deepArDistDir = path.join(__dirname, "node_modules", "deepar");
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -12,9 +32,12 @@ const mimeTypes = {
   ".mjs": "text/javascript; charset=utf-8",
   ".glb": "model/gltf-binary",
   ".wasm": "application/wasm",
-  ".task": "application/octet-stream",
-  ".png": "image/png",
-  ".svg": "image/svg+xml"
+    ".deepar": "application/octet-stream",
+    ".bin": "application/octet-stream",
+    ".task": "application/octet-stream",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp"
 };
 
 const hairstylePrompts = {
@@ -221,13 +244,17 @@ async function renderLiveAiHairLayer(request, response) {
     }
     const outputSize = chooseAiOutputSize(portraitSize.width, portraitSize.height);
     const prompt = [
-      'The first image is the exact live portrait to edit. The second image is an AR placement guide. The third image is the hairstyle shape reference.',
+      'The first image is the exact live webcam portrait to edit.',
+      'The second and third images are synthetic geometry guides only. Use them only for the hairstyle silhouette, cut, hairline, length, and placement. Do not copy their rendered texture, smooth clumps, painted highlights, studio lighting, edge color, or material finish.',
       'The transparent area of the supplied edit mask is the only region where hair may be changed.',
       'Replace only the existing hair with ' + hairstyle + ' in ' + body.colorName + '.',
-      'Follow the placement guide for size, hairline, length, and position, but render the result photorealistically.',
-      'Preserve the exact identity, face, expression, skin, pose, body, clothes, room, lighting, camera noise, crop, and image dimensions from the first portrait.',
-      'Merge natural roots and fine strands into the scalp and temples. Remove the old hair wherever it conflicts with the selected style.',
-      'Do not leave a face-shaped hole, hard oval edge, halo, floating layer, black geometry, or pasted-wig appearance.',
+      'Render real human hair photographed by the same webcam: irregular strand thickness, fine flyaways, slight asymmetry, natural density variation, believable root direction, subtle scalp visibility at a part, and translucent wisps at the silhouette.',
+      'Match the portrait\'s existing directional light, exposure, white balance, focus, sensor noise, compression, highlights, and shadows. Do not relight or beautify the frame.',
+      'Preserve the exact identity, face, expression, skin, pose, anatomy, body, clothes, room, camera angle, crop, and image dimensions from the first portrait.',
+      'Merge natural roots and individual strands into the scalp and temples. Remove the old hair wherever it conflicts with the selected style.',
+      'The hair must not look like CGI, a 3D render, a game asset, an illustration, a plastic surface, a mannequin, a helmet, or a pasted wig.',
+      'Do not leave a face-shaped hole, hard oval edge, halo, floating layer, black geometry, repeated strand pattern, or perfect specular band.',
+      'At normal viewing size and at 100 percent crop, the edited region should look like pixels from the same unedited webcam photograph.',
       'Return one complete edited portrait in the exact original coordinate system.'
     ].join(' ');
 
@@ -235,8 +262,8 @@ async function renderLiveAiHairLayer(request, response) {
     form.append('model', aiArRenderSettings.model);
     form.append('mask', new Blob([editMask], { type: 'image/png' }), 'hairstyle-edit-mask.png');
     form.append('image[]', new Blob([portrait], { type: 'image/png' }), 'live-portrait.png');
-    form.append('image[]', new Blob([arPreview.data], { type: arPreview.type }), 'ar-placement-preview.' + arPreview.extension);
-    form.append('image[]', new Blob([styleReference.data], { type: styleReference.type }), 'hairstyle-reference.' + styleReference.extension);
+    form.append('image[]', new Blob([arPreview.data], { type: arPreview.type }), 'synthetic-placement-geometry-guide.' + arPreview.extension);
+    form.append('image[]', new Blob([styleReference.data], { type: styleReference.type }), 'synthetic-cut-shape-guide.' + styleReference.extension);
     form.append('prompt', prompt);
     form.append('quality', aiArRenderSettings.quality);
     form.append('size', outputSize);
@@ -289,8 +316,35 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (request.method === "GET" && decodedPath === "/api/deepar-config") {
+    sendJson(response, 200, getDeepArConfiguration(publicDir));
+    return;
+  }
+
   if (request.method === "POST" && decodedPath === "/api/ai-render") {
     renderAiHairstyle(request, response);
+    return;
+  }
+
+  const deepArPrefix = "/vendor/deepar/";
+  if (request.method === "GET" && decodedPath.startsWith(deepArPrefix)) {
+    const relativePath = decodedPath.slice(deepArPrefix.length);
+    const filePath = path.resolve(deepArDistDir, relativePath);
+    if (!filePath.startsWith(deepArDistDir + path.sep)) {
+      response.writeHead(403).end("Forbidden");
+      return;
+    }
+    fs.readFile(filePath, (error, data) => {
+      if (error) {
+        response.writeHead(error.code === "ENOENT" ? 404 : 500).end("Not found");
+        return;
+      }
+      response.writeHead(200, {
+        "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream",
+        "Cache-Control": "no-store"
+      });
+      response.end(data);
+    });
     return;
   }
 

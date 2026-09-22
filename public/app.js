@@ -1,6 +1,7 @@
 const canvas = document.querySelector("#previewCanvas");
 const context = canvas.getContext("2d");
 const arCanvas = document.querySelector("#arCanvas");
+const deepArRoot = document.querySelector("#deeparRoot");
 const video = document.querySelector("#cameraVideo");
 const emptyState = document.querySelector("#emptyState");
 const cameraStatus = document.querySelector("#cameraStatus");
@@ -83,12 +84,12 @@ const hairstyles = [
     description: "Soft feathered layers",
     asset: "assets/hair/feather-cut.png",
     model3d: {
-      id: "feather-cc-by",
-      src: "assets/models/feather-cc-by.glb",
-      license: "CC BY 4.0 / 04saken via MakeHuman Community",
-      anchor: [0.06, 6.72, 0.24],
-      canonicalFaceWidth: 1.5,
-      yOffsetRatio: -0.025,
+      id: "feather-cc0",
+      src: "assets/models/feather-cc0.glb",
+      license: "CC0 / MakeHuman Community bob topology, Mirrorly feather shaping",
+      anchor: [0, 6.78, 0.22],
+      canonicalFaceWidth: 1.52,
+      yOffsetRatio: -0.08,
       occluderDepth: 0.68,
       occluderWidthRatio: 0.81,
       occluderHeightRatio: 1.04,
@@ -284,6 +285,9 @@ const state = {
   captured: false,
   capturedFrame: null,
   liveAr: false,
+  deepArActive: false,
+  deepArSwitching: false,
+  deepArSwitchVersion: 0,
   arReady: false,
   arLoading: false,
   aiAvailable: false,
@@ -304,6 +308,39 @@ function currentLookKey() {
   return state.style.id + ':' + state.color.name;
 }
 
+async function activateLocalLiveRenderer(message) {
+  window.MirrorlyDeepAR?.pause();
+  state.deepArActive = false;
+  if (deepArRoot) deepArRoot.hidden = true;
+  await window.MirrorlyAR.initialize(arCanvas, video);
+  state.arReady = true;
+  syncArHair();
+  window.MirrorlyAR.setEnabled(true);
+  arCanvas.hidden = true;
+  trackingHint.textContent = message;
+  updateLiveAiHairButton();
+}
+
+async function syncDeepArLook() {
+  if (!state.liveAr || !state.deepArActive || !window.MirrorlyDeepAR) return;
+  const switchVersion = ++state.deepArSwitchVersion;
+  state.deepArSwitching = true;
+  trackingHint.textContent = 'Switching the live DeepAR hairstyle...';
+  try {
+    const applied = await window.MirrorlyDeepAR.applyLook(state.style.id, state.color.name);
+    if (switchVersion !== state.deepArSwitchVersion) return;
+    if (!applied) throw new Error('Matching DeepAR hairstyle effect is not installed');
+    if (state.deepArActive) trackingHint.textContent = 'DeepAR hairstyle effect active';
+  } catch (error) {
+    if (switchVersion !== state.deepArSwitchVersion) return;
+    console.error('Mirrorly DeepAR look switch failed', error);
+    await activateLocalLiveRenderer('DeepAR effect unavailable - local live renderer active');
+    showToast('This look uses the local renderer until its DeepAR effect is installed');
+  } finally {
+    if (switchVersion === state.deepArSwitchVersion) state.deepArSwitching = false;
+  }
+}
+
 // Session-only timing numbers, never portraits, landmarks, or API credentials.
 window.MirrorlyAiDiagnostics = { getMetrics: () => ({
   live: state.liveAiTimings ? { ...state.liveAiTimings } : null,
@@ -319,6 +356,13 @@ function usesTrue3dLive(style) {
 }
 
 function updateLiveAiHairButton() {
+  if (state.deepArActive) {
+    liveAiHairButton.disabled = true;
+    liveAiHairButton.classList.add('active');
+    liveAiHairButton.textContent = 'Depth hairstyle AR active';
+    liveAiHairButton.title = 'The matching DeepAR hairstyle effect is rendering live';
+    return;
+  }
   const active = Boolean(state.liveAiHair && state.liveAiHairKey === currentLookKey());
   liveAiHairButton.disabled = !state.liveAr || !state.aiAvailable || state.liveAiHairGenerating;
   liveAiHairButton.classList.toggle('active', active);
@@ -436,11 +480,12 @@ function createStyleButtons() {
     button.type = "button";
     button.setAttribute("role", "radio");
     button.setAttribute("aria-checked", index === 0 ? "true" : "false");
-    button.innerHTML = `<span class="style-model"><img src="${style.asset}" alt="" /><canvas width="180" height="110" hidden aria-hidden="true"></canvas><em class="true-3d-badge">AI LIVE</em></span><strong>${style.name}</strong><small>${style.description}</small>`;
+    button.innerHTML = `<span class="style-model"><img src="${style.asset}" alt="" /><canvas width="180" height="110" hidden aria-hidden="true"></canvas></span><strong>${style.name}</strong><small>${style.description}</small>`;
     stylePreviewCanvases.set(style.id, button.querySelector("canvas"));
     button.addEventListener("click", () => {
       clearAiResult();
       state.style = style;
+      if (state.demo) syncDemoPortrait();
       styleGrid.querySelectorAll("button").forEach((item) => {
         const selected = item === button;
         item.classList.toggle("active", selected);
@@ -456,6 +501,7 @@ function createStyleButtons() {
           : "This hairstyle is ready for live AI AR");
       renderStylePreviews();
       syncArHair();
+      syncDeepArLook();
       scheduleAutomaticAiStill();
     });
     styleGrid.append(button);
@@ -489,6 +535,7 @@ function createColorButtons() {
       updateSelectedLook();
       renderStylePreviews();
       syncArHair();
+      syncDeepArLook();
       scheduleAutomaticAiStill();
     });
     colorGrid.append(button);
@@ -517,6 +564,7 @@ async function startCamera() {
     await video.play();
     state.active = true;
     state.demo = false;
+    delete canvas.dataset.demoCategory;
     state.captured = false;
     state.capturedFrame = null;
     clearAiResult();
@@ -540,6 +588,10 @@ async function startCamera() {
 }
 
 function syncArHair() {
+  if (state.deepArActive) {
+    updateLiveAiHairButton();
+    return;
+  }
   if (!state.arReady || !window.MirrorlyAR) return;
   const useGeneratedHair = state.liveAiHair && state.liveAiHairKey === currentLookKey();
   const hair = useGeneratedHair
@@ -768,6 +820,29 @@ function selectCapturedHeadHair(mask, capture) {
   });
 }
 
+function estimateAiColorCorrection(aiPixels, originalPixels, semanticPixels, originalHairPixels, region) {
+  const sums = [0, 0, 0];
+  let count = 0;
+  const step = Math.max(2, Math.ceil(Math.max(region.width, region.height) / 240));
+  const left = Math.max(0, Math.floor(region.centerX - region.radiusX));
+  const right = Math.min(region.width - 1, Math.ceil(region.centerX + region.radiusX));
+  const top = Math.max(0, Math.floor(region.centerY - region.radiusY));
+  const bottom = Math.min(region.height - 1, Math.ceil(region.centerY + region.radiusY));
+  for (let y = top; y <= bottom; y += step) for (let x = left; x <= right; x += step) {
+    const pixel = (y * region.width + x) * 4;
+    if ((semanticPixels?.data[pixel + 3] || 0) > 24 || (originalHairPixels?.data[pixel + 3] || 0) > 24) continue;
+    const originalLuma = originalPixels.data[pixel] * 0.2126
+      + originalPixels.data[pixel + 1] * 0.7152 + originalPixels.data[pixel + 2] * 0.0722;
+    if (originalLuma < 18 || originalLuma > 238) continue;
+    const differences = [0, 1, 2].map((channel) => originalPixels.data[pixel + channel] - aiPixels.data[pixel + channel]);
+    if (Math.max(...differences.map(Math.abs)) > 64) continue;
+    for (let channel = 0; channel < 3; channel += 1) sums[channel] += differences[channel];
+    count += 1;
+  }
+  if (count < 12) return [0, 0, 0];
+  return sums.map((sum) => clampNumber(sum / count, -28, 28));
+}
+
 function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   if (!capture.faceMask) throw new Error('Face contour unavailable - restart the live mirror');
   const width = image.naturalWidth;
@@ -809,6 +884,10 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   const faceHeight = capture.pose.faceHeight * scaleY;
   const faceCenterX = capture.pose.faceCenterX * scaleX;
   const faceCenterY = capture.pose.faceCenterY * scaleY;
+  const colorCorrection = estimateAiColorCorrection(aiPixels, originalPixels, semanticPixels, originalHairPixels, {
+    width, height, centerX: faceCenterX, centerY: faceCenterY,
+    radiusX: faceWidth * 1.45, radiusY: faceHeight * 1.35
+  });
   const guideCoreCanvas = document.createElement('canvas');
   guideCoreCanvas.width = width;
   guideCoreCanvas.height = height;
@@ -877,15 +956,15 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       );
       if (alpha < 5) continue;
 
-      repairPixels.data[pixel] = aiPixels.data[pixel];
-      repairPixels.data[pixel + 1] = aiPixels.data[pixel + 1];
-      repairPixels.data[pixel + 2] = aiPixels.data[pixel + 2];
+      repairPixels.data[pixel] = clampNumber(aiPixels.data[pixel] + colorCorrection[0], 0, 255);
+      repairPixels.data[pixel + 1] = clampNumber(aiPixels.data[pixel + 1] + colorCorrection[1], 0, 255);
+      repairPixels.data[pixel + 2] = clampNumber(aiPixels.data[pixel + 2] + colorCorrection[2], 0, 255);
       repairPixels.data[pixel + 3] = Math.round(255 * regionAlpha * repairAlpha);
       // Foreground pixels contain ONLY AI hair, not the old-hair repair patch.
       // Do not multiply the semantic confidence twice, creating hairline holes.
-      hairOnlyPixels.data[pixel] = aiPixels.data[pixel];
-      hairOnlyPixels.data[pixel + 1] = aiPixels.data[pixel + 1];
-      hairOnlyPixels.data[pixel + 2] = aiPixels.data[pixel + 2];
+      hairOnlyPixels.data[pixel] = clampNumber(aiPixels.data[pixel] + colorCorrection[0], 0, 255);
+      hairOnlyPixels.data[pixel + 1] = clampNumber(aiPixels.data[pixel + 1] + colorCorrection[1], 0, 255);
+      hairOnlyPixels.data[pixel + 2] = clampNumber(aiPixels.data[pixel + 2] + colorCorrection[2], 0, 255);
       hairOnlyPixels.data[pixel + 3] = Math.round(255 * regionAlpha * hairAlpha);
       if (alpha >= 24) {
         if (y === 0) clipped.top = true;
@@ -983,7 +1062,16 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       crop: { x: minX / scaleX, y: minY / scaleY, width: cropWidth / scaleX, height: cropHeight / scaleY },
       headX: capture.pose.headX, headY: capture.pose.headY,
       faceWidth: capture.pose.faceWidth, quaternion: capture.pose.quaternion.slice(),
-      depth: capture.pose.foreheadDepth, depthSamples: capture.pose.depthSamples
+      depth: capture.pose.foreheadDepth, depthSamples: capture.pose.depthSamples,
+      // Realism-first: keep the generated photograph nearly planar and only
+      // show it near the captured front view. Frozen room repair disappears
+      // even sooner so it cannot become a moving dark polygon.
+      depthStrength: 0.12,
+      viewFadeStart: 10 * Math.PI / 180,
+      viewFadeEnd: 15 * Math.PI / 180,
+      repairTravelStart: 0.008, repairTravelEnd: 0.045,
+      repairZoomStart: 0.012, repairZoomEnd: 0.055,
+      repairAngleStart: 0.018, repairAngleEnd: 0.075
     },
     faceOpeningRatio: clampNumber(faceWidth / cropWidth, 0.12, 1.2),
     faceOpeningHeightRatio: clampNumber(faceHeight / cropHeight, 0.12, 1.2),
@@ -1167,6 +1255,11 @@ async function measureCapturedFace(capturedFrame) {
 function stopLiveAr(showMessage = true) {
   state.liveSessionVersion += 1;
   state.liveAr = false;
+  if (state.deepArActive) window.MirrorlyDeepAR?.pause();
+  state.deepArActive = false;
+  state.deepArSwitching = false;
+  state.deepArSwitchVersion += 1;
+  if (deepArRoot) deepArRoot.hidden = true;
   window.MirrorlyAR?.setEnabled(false);
   arCanvas.hidden = true;
   liveArButton.classList.remove("active");
@@ -1176,6 +1269,7 @@ function stopLiveAr(showMessage = true) {
   snapshotButton.disabled = true;
   cameraStatus.textContent = "Camera active";
   trackingHint.textContent = "Live AI AR paused";
+  if (privacyStatus) privacyStatus.textContent = "Live AI tracking stays on this laptop";
   updateSelectedLook();
   updateLiveAiHairButton();
   if (showMessage) showToast("Live AI AR paused");
@@ -1198,6 +1292,32 @@ async function startLiveAr({ automatic = false } = {}) {
   liveArButton.textContent = "Loading live AI AR...";
   trackingHint.textContent = "Loading the local AI face tracker";
   try {
+    const deepArResult = await window.MirrorlyDeepAR?.start({
+      videoElement: video,
+      root: deepArRoot,
+      styleId: state.style.id,
+      colorName: state.color.name
+    });
+    if (deepArResult?.active) {
+      state.liveAr = true;
+      state.deepArActive = true;
+      state.liveSessionVersion += 1;
+      window.MirrorlyAR?.setEnabled(false);
+      arCanvas.hidden = true;
+      liveArButton.disabled = false;
+      liveArButton.classList.add("active");
+      liveArButton.textContent = "Pause DeepAR";
+      captureFaceButton.disabled = false;
+      snapshotButton.disabled = false;
+      cameraStatus.textContent = "DeepAR active";
+      trackingHint.textContent = "DeepAR hairstyle effect active";
+      privacyStatus.textContent = "Live DeepAR processing stays in this browser";
+      updateSelectedLook();
+      updateLiveAiHairButton();
+      showToast("Real-time DeepAR hairstyle effect active");
+      return true;
+    }
+
     await window.MirrorlyAR.initialize(arCanvas, video);
     state.arReady = true;
     syncArHair();
@@ -1248,7 +1368,7 @@ function startDemo() {
   state.captured = true;
   state.capturedFrame = null;
   emptyState.classList.add("hidden");
-  cameraStatus.textContent = "3D demo mode";
+  cameraStatus.textContent = "Salon photo demo";
   cameraStatus.classList.add("active");
   if (beforeAfterButton) beforeAfterButton.disabled = false;
   captureFaceButton.disabled = true;
@@ -1256,12 +1376,7 @@ function startDemo() {
   snapshotButton.disabled = false;
   updateSelectedLook();
   resizeCanvas(960, 720);
-  drawDemoScene();
-  const demoCapture = document.createElement("canvas");
-  demoCapture.width = canvas.width;
-  demoCapture.height = canvas.height;
-  demoCapture.getContext("2d").drawImage(canvas, 0, 0);
-  state.capturedFrame = demoCapture;
+  syncDemoPortrait();
   clearAiResult();
   renderStylePreviews();
   requestAnimationFrame(render);
@@ -1277,94 +1392,90 @@ function roundedRectangle(x, y, width, height, radius) {
   return path;
 }
 
-function drawDemoScene() {
-  const room = context.createRadialGradient(canvas.width * 0.5, canvas.height * 0.35, 20, canvas.width * 0.5, canvas.height * 0.45, canvas.width * 0.75);
-  room.addColorStop(0, "#274448");
-  room.addColorStop(0.48, "#152426");
-  room.addColorStop(1, "#080c0f");
-  context.fillStyle = room;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  context.save();
-  context.globalAlpha = 0.28;
-  context.fillStyle = "#d7ad68";
-  for (let x = 38; x < canvas.width; x += 180) {
-    context.fill(roundedRectangle(x, 42, 112, 410, 56));
-    context.fillStyle = "#0b1416";
-    context.fill(roundedRectangle(x + 8, 50, 96, 394, 48));
-    context.fillStyle = "#d7ad68";
-  }
-  context.restore();
-
-  const mirrorGlow = context.createLinearGradient(0, 90, 0, 690);
-  mirrorGlow.addColorStop(0, "#f7ddb0");
-  mirrorGlow.addColorStop(0.5, "#b78443");
-  mirrorGlow.addColorStop(1, "#4f321d");
-  context.fillStyle = mirrorGlow;
-  context.shadowColor = "rgba(235, 185, 104, .45)";
-  context.shadowBlur = 34;
-  context.fill(roundedRectangle(190, 28, 580, 690, 44));
-  context.shadowBlur = 0;
-  const glass = context.createLinearGradient(210, 50, 750, 700);
-  glass.addColorStop(0, "#19363b");
-  glass.addColorStop(0.5, "#102327");
-  glass.addColorStop(1, "#071113");
-  context.fillStyle = glass;
-  context.fill(roundedRectangle(202, 40, 556, 666, 36));
-
-  const shoulders = context.createLinearGradient(0, 500, 0, 720);
-  shoulders.addColorStop(0, "#1f5a52");
-  shoulders.addColorStop(1, "#092b2a");
-  context.fillStyle = shoulders;
-  context.beginPath();
-  context.ellipse(480, 727, 260, 190, 0, Math.PI, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = "#9d624c";
-  context.fill(roundedRectangle(435, 437, 90, 132, 35));
-  const skin = context.createRadialGradient(435, 230, 30, 490, 330, 190);
-  skin.addColorStop(0, "#f0b794");
-  skin.addColorStop(0.55, "#c98263");
-  skin.addColorStop(1, "#784536");
-  context.fillStyle = skin;
-  context.shadowColor = "rgba(0,0,0,.35)";
-  context.shadowBlur = 24;
-  context.beginPath();
-  context.ellipse(480, 320, 118, 157, 0, 0, Math.PI * 2);
-  context.fill();
-  context.shadowBlur = 0;
-
-  context.fillStyle = "rgba(45,25,23,.82)";
-  context.beginPath();
-  context.ellipse(438, 304, 23, 7, -0.08, 0, Math.PI * 2);
-  context.ellipse(522, 304, 23, 7, 0.08, 0, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "#f4ddd1";
-  context.beginPath();
-  context.ellipse(438, 303, 16, 4, 0, 0, Math.PI * 2);
-  context.ellipse(522, 303, 16, 4, 0, 0, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "#32201d";
-  context.beginPath();
-  context.arc(438, 303, 4, 0, Math.PI * 2);
-  context.arc(522, 303, 4, 0, Math.PI * 2);
-  context.fill();
-  context.strokeStyle = "rgba(104,55,45,.65)";
-  context.lineWidth = 4;
-  context.beginPath();
-  context.moveTo(482, 314);
-  context.quadraticCurveTo(468, 357, 487, 364);
-  context.stroke();
-  context.fillStyle = "#8f4050";
-  context.beginPath();
-  context.ellipse(480, 400, 31, 9, 0, 0, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = "rgba(255,255,255,.72)";
-  context.font = "600 15px system-ui";
-  context.fillText("3D SALON DEMO - MOVE THE POINTER TO SEE DEPTH", 28, 40);
+const demoProfiles = {
+  male: { asset: 'assets/demo/male-demo.png', faceCenterX: 0.5, faceCenterY: 0.37, faceWidth: 0.25, faceHeight: 0.35 },
+  female: { asset: 'assets/demo/female-demo.png', faceCenterX: 0.5, faceCenterY: 0.41, faceWidth: 0.25, faceHeight: 0.35 }
+};
+const demoImages = new Map();
+for (const [category, profile] of Object.entries(demoProfiles)) {
+  const image = new Image();
+  image.decoding = 'async';
+  image.addEventListener('load', () => {
+    if (!state.demo) return;
+    syncDemoPortrait();
+    renderStylePreviews();
+  });
+  image.addEventListener('error', () => {
+    if (state.demo) showToast('Demo portrait unavailable; the live camera still works');
+  });
+  image.src = profile.asset;
+  demoImages.set(category, image);
 }
 
+function getDemoCategory(style = state.style) {
+  return style.category === "Men's styles" ? 'male' : 'female';
+}
+
+function getDemoHairStyle(style) {
+  // Fit this fixed photographic demo only; preserve customer/live calibration.
+  return style.id === 'curtain-bangs'
+    ? { ...style, faceOpeningRatio: 0.48, faceCenterYRatio: 0.52 }
+    : style;
+}
+
+function getDemoPhotoLayout(targetCanvas, style = state.style) {
+  const category = getDemoCategory(style);
+  const profile = demoProfiles[category];
+  const image = demoImages.get(category);
+  if (!image?.complete || !image.naturalWidth) return null;
+  const scale = Math.max(targetCanvas.width / image.naturalWidth, targetCanvas.height / image.naturalHeight);
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  const x = (targetCanvas.width - width) / 2;
+  const y = (targetCanvas.height - height) / 2;
+  const centerX = x + width * profile.faceCenterX;
+  const centerY = y + height * profile.faceCenterY;
+  const faceWidth = width * profile.faceWidth;
+  const faceHeight = height * profile.faceHeight;
+  return { image, x, y, width, height, face: {
+    mirrored: true, centerX, centerY, width: faceWidth, height: faceHeight,
+    x: centerX - faceWidth / 2, y: centerY - faceHeight / 2, roll: 0
+  } };
+}
+
+function drawDemoScene(targetContext = context, targetCanvas = canvas, style = state.style) {
+  targetContext.save();
+  targetContext.fillStyle = '#102426';
+  targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  const layout = getDemoPhotoLayout(targetCanvas, style);
+  if (layout) {
+    targetContext.drawImage(layout.image, layout.x, layout.y, layout.width, layout.height);
+  } else {
+    targetContext.fillStyle = '#f3dfbd';
+    targetContext.font = '600 18px system-ui';
+    targetContext.textAlign = 'center';
+    targetContext.fillText('Loading salon demo portrait...', targetCanvas.width / 2, targetCanvas.height / 2);
+  }
+  targetContext.restore();
+  return layout;
+}
+
+function createDemoFrame(style = state.style) {
+  const frame = document.createElement('canvas');
+  frame.width = 960;
+  frame.height = 720;
+  const layout = drawDemoScene(frame.getContext('2d'), frame, style);
+  return { frame, face: layout?.face || null };
+}
+
+function syncDemoPortrait() {
+  if (!state.demo) return;
+  const { frame, face } = createDemoFrame();
+  state.capturedFrame = frame;
+  state.detection = face;
+  canvas.dataset.demoCategory = getDemoCategory();
+  drawDemoScene();
+}
 async function detectFace(now) {
   if (!detector || state.demo || !controls.autoAlign.checked || state.detectorBusy || now - state.lastDetectionAt < 180) return;
   state.detectorBusy = true;
@@ -1516,9 +1627,8 @@ function getTintedHair(style, color) {
   return tinted;
 }
 
-function drawCapturedFaceCrop(targetContext, targetCanvas) {
-  if (!state.capturedFrame) return;
-  const source = state.capturedFrame;
+function drawCapturedFaceCrop(targetContext, targetCanvas, source = state.capturedFrame, measurement = state.detection) {
+  if (!source) return;
   const targetRatio = targetCanvas.width / targetCanvas.height;
   let sourceHeight = source.height * 0.58;
   let sourceWidth = sourceHeight * targetRatio;
@@ -1526,10 +1636,10 @@ function drawCapturedFaceCrop(targetContext, targetCanvas) {
     sourceWidth = source.width;
     sourceHeight = sourceWidth / targetRatio;
   }
-  const measuredCenterX = state.detection?.mirrored
-    ? (state.detection.centerX ?? state.detection.x + state.detection.width / 2)
+  const measuredCenterX = measurement?.mirrored
+    ? (measurement.centerX ?? measurement.x + measurement.width / 2)
     : source.width / 2;
-  const measuredCenterY = state.detection?.centerY ?? source.height * 0.43;
+  const measuredCenterY = measurement?.centerY ?? source.height * 0.43;
   const sourceX = Math.max(0, Math.min(source.width - sourceWidth, measuredCenterX - sourceWidth / 2));
   const sourceY = Math.max(0, Math.min(source.height - sourceHeight, measuredCenterY - sourceHeight * 0.43));
   targetContext.drawImage(
@@ -1550,7 +1660,8 @@ function drawCapturedFaceCrop(targetContext, targetCanvas) {
   };
 }
 
-function drawHairPreview(targetContext, targetCanvas, style, crop) {
+function drawHairPreview(targetContext, targetCanvas, style, crop, measurement = state.detection) {
+  if (state.demo) style = getDemoHairStyle(style);
   const hair = getTintedHair(style, state.color);
   if (!hair) return;
   let faceWidth = targetCanvas.height * 0.25;
@@ -1558,8 +1669,8 @@ function drawHairPreview(targetContext, targetCanvas, style, crop) {
   let faceCenterY = targetCanvas.height * 0.43;
   let faceHeight = faceWidth * 1.15;
   let roll = 0;
-  if (state.detection?.mirrored && controls.autoAlign.checked && crop) {
-    const box = state.detection;
+  if (measurement?.mirrored && controls.autoAlign.checked && crop) {
+    const box = measurement;
     faceWidth = box.width * crop.scale * 1.02;
     faceHeight = box.height * crop.scale * 1.02;
     faceCenterX = ((box.centerX ?? box.x + box.width / 2) - crop.sourceX) * crop.scale;
@@ -1589,6 +1700,12 @@ function renderStylePreviews() {
     const preview = stylePreviewCanvases.get(style.id);
     if (!preview) continue;
     const sourceImage = preview.parentElement.querySelector("img");
+    const demo = state.demo ? createDemoFrame(style) : null;
+    if (demo && !demo.face) {
+      preview.hidden = true;
+      sourceImage.hidden = false;
+      continue;
+    }
     if (!state.capturedFrame) {
       preview.hidden = true;
       sourceImage.hidden = false;
@@ -1598,8 +1715,8 @@ function renderStylePreviews() {
     sourceImage.hidden = true;
     const previewContext = preview.getContext("2d");
     previewContext.clearRect(0, 0, preview.width, preview.height);
-    const crop = drawCapturedFaceCrop(previewContext, preview);
-    drawHairPreview(previewContext, preview, style, crop);
+    const crop = drawCapturedFaceCrop(previewContext, preview, demo?.frame || state.capturedFrame, demo?.face || state.detection);
+    drawHairPreview(previewContext, preview, style, crop, demo?.face || state.detection);
     const warmth = previewContext.createLinearGradient(0, 0, 0, preview.height);
     warmth.addColorStop(0, "rgba(35,65,68,.04)");
     warmth.addColorStop(1, "rgba(181,112,67,.08)");
@@ -1700,7 +1817,8 @@ async function captureFace() {
 
 function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, forceOverlay = false) {
   if (!state.showOverlay && !forceOverlay) return;
-  const hair = getTintedHair(state.style, state.color);
+  const style = state.demo ? getDemoHairStyle(state.style) : state.style;
+  const hair = getTintedHair(style, state.color);
   if (!hair) return;
 
   const numericScale = Number(controls.scale.value) / 100;
@@ -1727,11 +1845,11 @@ function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, 
 
   // Long V/U assets have asymmetric inner layers; their visual center sits a
   // little left of the transparent face opening, so compensate per style.
-  faceCenterX += faceWidth * (state.style.faceOffsetXRatio || 0);
+  faceCenterX += faceWidth * (style.faceOffsetXRatio || 0);
 
-  const drawWidth = faceWidth / state.style.faceOpeningRatio * numericScale;
-  const drawHeight = state.style.faceOpeningHeightRatio
-    ? faceHeight / state.style.faceOpeningHeightRatio * numericScale
+  const drawWidth = faceWidth / style.faceOpeningRatio * numericScale;
+  const drawHeight = style.faceOpeningHeightRatio
+    ? faceHeight / style.faceOpeningHeightRatio * numericScale
     : drawWidth * (hair.height / hair.width);
   const parallaxX = state.pointer.x * 7 * depth;
   const parallaxY = state.pointer.y * 4 * depth;
@@ -1759,7 +1877,7 @@ function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, 
   targetContext.drawImage(
     hair,
     -drawWidth * 0.5,
-    -drawHeight * state.style.faceCenterYRatio,
+    -drawHeight * style.faceCenterYRatio,
     drawWidth,
     drawHeight
   );
@@ -1773,7 +1891,7 @@ function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, 
   targetContext.drawImage(
     hair,
     -drawWidth * 0.5,
-    -drawHeight * state.style.faceCenterYRatio,
+    -drawHeight * style.faceCenterYRatio,
     drawWidth,
     drawHeight
   );
@@ -1886,7 +2004,7 @@ function render(now = 0) {
   } else if (state.holdCapturedFrame && state.capturedFrame) {
     // Keep the untouched captured portrait visible while the hidden AR
     // placement guide is prepared and the final AI edit is processing.
-  } else if (state.liveAr) {
+  } else if (state.liveAr && !state.deepArActive) {
     window.MirrorlyAR?.update(now, {
       x: Number(controls.x.value),
       y: Number(controls.y.value),
@@ -1915,20 +2033,27 @@ function setBeforeMode(enabled) {
 
 function saveSnapshot() {
   const snapshotCanvas = document.createElement("canvas");
-  snapshotCanvas.width = canvas.width;
-  snapshotCanvas.height = canvas.height;
+  const deepArCanvas = state.deepArActive ? window.MirrorlyDeepAR?.getCanvas() : null;
+  snapshotCanvas.width = deepArCanvas?.width || canvas.width;
+  snapshotCanvas.height = deepArCanvas?.height || canvas.height;
   const snapshotContext = snapshotCanvas.getContext("2d");
-  snapshotContext.drawImage(canvas, 0, 0);
-  if (state.liveAr && !arCanvas.hidden) snapshotContext.drawImage(arCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+  if (deepArCanvas) {
+    snapshotContext.drawImage(deepArCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+  } else {
+    snapshotContext.drawImage(canvas, 0, 0);
+    if (state.liveAr && !arCanvas.hidden) snapshotContext.drawImage(arCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+  }
   snapshotCanvas.toBlob((blob) => {
     if (!blob) return;
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    const mode = state.aiResult ? "ai-realistic" : "3d";
+    const mode = state.aiResult ? "ai-realistic" : (state.deepArActive ? "deepar" : "3d");
     link.download = `mirrorly-${mode}-${state.style.id}-${new Date().toISOString().replaceAll(":", "-")}.png`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    showToast(state.aiResult ? "Realistic AI still saved on this laptop" : "3D preview saved on this laptop");
+    showToast(state.aiResult
+      ? "Realistic AI still saved on this laptop"
+      : (state.deepArActive ? "DeepAR preview saved on this laptop" : "3D preview saved on this laptop"));
   }, "image/png");
 }
 
@@ -2078,15 +2203,10 @@ beforeAfterButton?.addEventListener("keyup", () => setBeforeMode(false));
 window.addEventListener("beforeunload", () => {
   video.srcObject?.getTracks().forEach((track) => track.stop());
   window.MirrorlyAR?.dispose();
+  window.MirrorlyDeepAR?.destroy();
 });
 
 createStyleButtons();
-for (const [index, style] of hairstyles.entries()) {
-  if (usesTrue3dLive(style)) continue;
-  const styleButton = styleGrid.querySelectorAll('button')[index];
-  const badge = styleButton?.querySelector('.true-3d-badge');
-  if (badge) badge.textContent = 'LIVE AR';
-}
 window.addEventListener('mirrorly-ar-model', (event) => {
   const detail = event.detail || {};
   if (detail.status === 'png-fallback' && pngPreferredLiveStyles.has(detail.styleId)) {
