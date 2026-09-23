@@ -14,6 +14,15 @@ const snapshotButton = document.querySelector("#snapshotButton");
 const privacyStatus = document.querySelector("#privacyStatus");
 const selectedLookLabel = document.querySelector("#selectedLookLabel");
 const toast = document.querySelector("#toast");
+const salonCapturePanel = document.querySelector("#salonCapturePanel");
+const salonCaptureTitle = document.querySelector("#salonCaptureTitle");
+const salonCaptureGuide = document.querySelector("#salonCaptureGuide");
+const salonCaptureSteps = document.querySelector("#salonCaptureSteps");
+const salonCaptureResults = document.querySelector("#salonCaptureResults");
+const salonCaptureButton = document.querySelector("#salonCaptureButton");
+const salonGenerateButton = document.querySelector("#salonGenerateButton");
+const salonCancelButton = document.querySelector("#salonCancelButton");
+const salonCapturePrivacy = document.querySelector("#salonCapturePrivacy");
 const trackingHint = cameraStatus;
 // Fit is automatic in the customer-facing UI. Keep stable renderer defaults
 // internally so the MediaPipe measurement remains the single alignment source.
@@ -301,6 +310,13 @@ const state = {
   liveAiHairStartedAt: 0,
   liveAiTimings: null,
   aiPhotoTimings: null,
+  salonCaptureActive: false,
+  salonCaptureIndex: 0,
+  salonCaptures: [],
+  salonResults: [],
+  salonSelectedView: "front",
+  salonSideSign: 0,
+  salonError: "",
   liveSessionVersion: 0
 };
 
@@ -389,6 +405,12 @@ let automaticAiTimer;
 function clearAiResult() {
   state.aiResult = null;
   state.holdCapturedFrame = Boolean(state.capturedFrame && state.captured && !state.demo);
+  if (state.salonCaptures.length) {
+    state.salonResults = [];
+    state.salonSelectedView = "front";
+    salonCapturePanel.hidden = false;
+    renderSalonCapturePanel();
+  }
   if (privacyStatus) privacyStatus.textContent = "Live AI tracking stays on this laptop";
   updateAiButton();
 }
@@ -396,20 +418,18 @@ function clearAiResult() {
 function updateAiButton() {
   if (!captureFaceButton) return;
   captureFaceButton.title = state.aiAvailable
-    ? "Optional: freeze the current pose and create a realistic AI hairstyle photo"
-    : "Optional photo is local; generative AI merge resumes when API access is available";
+    ? "Capture front, left, and right views for a realistic salon hairstyle result"
+    : "Salon capture checks are local; generation resumes when API access is available";
 }
 
 function scheduleAutomaticAiStill() {
   clearTimeout(automaticAiTimer);
-  if (!state.capturedFrame || !state.captured || state.demo || !state.aiAvailable) return;
-  automaticAiTimer = setTimeout(() => {
-    if (state.aiRendering) {
-      state.aiRefreshPending = true;
-      return;
-    }
-    createAiStill();
-  }, 750);
+  if (!state.salonCaptures.length) return;
+  state.salonResults = [];
+  state.aiResult = null;
+  salonCapturePanel.hidden = false;
+  salonCaptureGuide.textContent = "The style or color changed. Generate the three salon views again when ready.";
+  renderSalonCapturePanel();
 }
 
 async function checkAiAvailability() {
@@ -493,6 +513,10 @@ function createStyleButtons() {
     button.innerHTML = `<span class="style-model"><img src="${style.asset}" alt="" /><canvas width="180" height="110" hidden aria-hidden="true"></canvas></span><strong>${style.name}</strong><small>${style.description}</small>`;
     stylePreviewCanvases.set(style.id, button.querySelector("canvas"));
     button.addEventListener("click", () => {
+      if (state.aiRendering || (state.salonCaptureActive && state.salonCaptures.length < 3)) {
+        showToast("Finish or cancel the guided capture before changing the selection");
+        return;
+      }
       clearAiResult();
       state.style = style;
       if (state.demo) syncDemoPortrait();
@@ -535,6 +559,10 @@ function createColorButtons() {
     label.textContent = color.name;
     button.append(swatch, label);
     button.addEventListener("click", () => {
+      if (state.aiRendering || (state.salonCaptureActive && state.salonCaptures.length < 3)) {
+        showToast("Finish or cancel the guided capture before changing the selection");
+        return;
+      }
       clearAiResult();
       state.color = color;
       colorGrid.querySelectorAll("button").forEach((item) => {
@@ -585,7 +613,7 @@ async function startCamera() {
     cameraStatus.classList.add("active");
     if (beforeAfterButton) beforeAfterButton.disabled = false;
     captureFaceButton.disabled = true;
-    captureFaceButton.textContent = "Optional AI photo";
+    captureFaceButton.textContent = "Create salon result";
     liveArButton.disabled = true;
     snapshotButton.disabled = true;
     updateSelectedLook();
@@ -1807,63 +1835,352 @@ function drawCaptureGuide() {
   context.restore();
 }
 
-async function captureFace() {
-  if (state.demo) {
-    showToast("Use the camera to capture a real face");
-    return;
+const salonViewDefinitions = [
+  { id: "front", label: "Front", title: "Capture the front view", guide: "Face forward, keep your full hair inside the frame, and hold still." },
+  { id: "left", label: "Left", title: "Capture the left view", guide: "Turn your head slightly left. Keep both eyes visible and hold still." },
+  { id: "right", label: "Right", title: "Capture the right view", guide: "Turn the same amount in the opposite direction and hold still." }
+];
+
+function renderSalonCapturePanel() {
+  if (!salonCapturePanel) return;
+  const target = salonViewDefinitions[Math.min(state.salonCaptureIndex, salonViewDefinitions.length - 1)];
+  const complete = state.salonCaptures.length >= salonViewDefinitions.length;
+  const hasResults = state.salonResults.length === salonViewDefinitions.length;
+  salonCaptureTitle.textContent = state.aiRendering
+    ? `Creating ${target?.label?.toLowerCase() || "salon"} result...`
+    : (hasResults ? "Three salon views ready" : (complete ? "Three views captured" : target.title));
+  salonCaptureGuide.textContent = hasResults
+    ? "Select a view below to inspect or save it."
+    : (complete
+      ? "Review the three local captures, then generate the selected hairstyle. This makes three AI image edits."
+      : target.guide);
+  salonCaptureSteps.replaceChildren(...salonViewDefinitions.map((view, index) => {
+    const item = document.createElement("div");
+    item.className = `salon-step${index === state.salonCaptureIndex && !complete ? " active" : ""}${state.salonCaptures[index] ? " complete" : ""}`;
+    const capture = state.salonCaptures[index];
+    if (capture) {
+      const image = document.createElement("img");
+      image.src = capture.thumbnail;
+      image.alt = `${view.label} capture`;
+      item.append(image);
+    }
+    item.append(document.createTextNode(capture ? `${view.label} ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“` : view.label));
+    return item;
+  }));
+  salonCaptureButton.hidden = complete || state.aiRendering;
+  salonCaptureButton.disabled = state.aiRendering;
+  salonCaptureButton.textContent = `Capture ${target.label.toLowerCase()}`;
+  salonGenerateButton.hidden = !complete || state.salonResults.length > 0;
+  salonGenerateButton.disabled = state.aiRendering || !state.aiAvailable;
+  salonCaptureResults.hidden = state.salonResults.length === 0;
+  salonCaptureResults.replaceChildren(...state.salonResults.map((result, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `salon-result${result.viewId === state.salonSelectedView ? " active" : ""}`;
+    const image = document.createElement("img");
+    image.src = result.dataUrl;
+    image.alt = `${result.label} salon result`;
+    button.append(image, document.createTextNode(result.label));
+    button.addEventListener("click", () => selectSalonResult(index));
+    return button;
+  }));
+}
+
+function assessSalonCapture(frame, pose, hairMask, index) {
+  const errors = [];
+  const yaw = Number(pose?.yaw);
+  const pitch = Math.abs(Number(pose?.pitch));
+  const roll = Math.abs(Number(pose?.roll));
+  const faceRatio = Number(pose?.faceWidth) / frame.width;
+  if (!Number.isFinite(yaw) || !Number.isFinite(faceRatio)) errors.push("Face tracking is not ready");
+  if (pitch > 0.24) errors.push("Keep your chin level");
+  if (roll > 0.20) errors.push("Keep your head upright");
+  if (faceRatio < 0.16) errors.push("Move closer to the camera");
+  if (faceRatio > 0.52) errors.push("Move farther from the camera");
+  if (index === 0 && Math.abs(yaw) > 0.16) errors.push("Face directly forward");
+  if (index === 1 && (Math.abs(yaw) < 0.18 || Math.abs(yaw) > 0.58)) errors.push("Turn slightly to one side");
+  if (index === 2) {
+    if (Math.abs(yaw) < 0.18 || Math.abs(yaw) > 0.58) errors.push("Turn slightly to the opposite side");
+    if (state.salonSideSign && Math.sign(yaw) === state.salonSideSign) errors.push("Turn in the opposite direction from the previous capture");
   }
-  if (state.captured) {
-    state.captured = false;
-    state.capturedFrame = null;
-    state.detection = null;
-    clearAiResult();
-    captureFaceButton.textContent = "Optional AI photo";
-    captureFaceButton.disabled = true;
-    liveArButton.disabled = true;
-    snapshotButton.disabled = true;
-    cameraStatus.textContent = "Camera active";
-    trackingHint.textContent = "Restarting live AI face tracking";
-    updateSelectedLook();
-    renderStylePreviews();
-    showToast("Returning to the live AI mirror");
-    await startLiveAr({ automatic: true });
-    return;
+  let visibleHair = 0;
+  let samples = 0;
+  for (let i = 0; i < hairMask.data.length; i += 8) {
+    visibleHair += hairMask.data[i] >= 0.5 ? 1 : 0;
+    samples += 1;
   }
+  const hairCoverage = samples ? visibleHair / samples : 0;
+  if (hairCoverage < 0.008) errors.push("Keep all of your hair visible in the frame");
+  if (hairCoverage > 0.62) errors.push("Move back so the full hairstyle area is visible");
+  return { valid: errors.length === 0, message: errors[0] || "Capture quality is good", hairCoverage };
+}
+
+async function beginSalonCapture() {
   if (video.readyState < 2 || !video.videoWidth) {
     showToast("Wait for the camera image, then try again");
     return;
   }
-  if (state.liveAr) stopLiveAr(false);
-  controls.x.value = 0;
-  controls.y.value = 0;
-  controls.scale.value = 100;
-  controls.rotation.value = 0;
-  state.detection = null;
-  const capturedFrame = document.createElement("canvas");
-  capturedFrame.width = video.videoWidth;
-  capturedFrame.height = video.videoHeight;
-  const capturedContext = capturedFrame.getContext("2d");
-  capturedContext.translate(capturedFrame.width, 0);
-  capturedContext.scale(-1, 1);
-  capturedContext.drawImage(video, 0, 0, capturedFrame.width, capturedFrame.height);
-  state.capturedFrame = capturedFrame;
-  state.captured = true;
-  clearAiResult();
-  captureFaceButton.textContent = "Return to live mirror";
+  if (!state.aiAvailable) {
+    showToast("AI access is required to create the salon result");
+    return;
+  }
+  state.salonCaptureActive = true;
+  state.salonCaptureIndex = 0;
+  state.salonCaptures = [];
+  state.salonResults = [];
+  state.salonSideSign = 0;
+  state.salonError = "";
+  state.salonSelectedView = "front";
+  if (!state.liveAr) {
+    state.liveAr = true;
+    state.liveSessionVersion += 1;
+  }
+  await activateLocalLiveRenderer("Preparing local face and hair checks");
+  salonCapturePanel.hidden = false;
+  captureFaceButton.disabled = true;
   liveArButton.disabled = true;
-  snapshotButton.disabled = false;
-  cameraStatus.textContent = "Face captured";
+  snapshotButton.disabled = true;
+  privacyStatus.textContent = "Capture quality checks stay on this laptop";
+  renderSalonCapturePanel();
+  showToast("Guided salon capture started");
+}
+
+async function captureSalonView() {
+  if (!state.salonCaptureActive || state.aiRendering) return;
+  const status = window.MirrorlyAR?.getStatus();
+  const pose = window.MirrorlyAR?.getCapturePose();
+  if (!status?.tracking || !pose) {
+    showToast("Hold your face in view until tracking is ready");
+    return;
+  }
+  salonCaptureButton.disabled = true;
+  salonCaptureGuide.textContent = "Checking face position and hair coverage locally...";
+  try {
+    const frame = captureLivePortrait();
+    const hairMask = await window.MirrorlyAR.segmentHair(frame);
+    const quality = assessSalonCapture(frame, pose, hairMask, state.salonCaptureIndex);
+    if (!quality.valid) {
+      salonCaptureGuide.textContent = quality.message;
+      showToast(quality.message);
+      return;
+    }
+    const definition = salonViewDefinitions[state.salonCaptureIndex];
+    const detection = {
+      x: pose.faceCenterX - pose.faceWidth / 2,
+      y: pose.faceCenterY - pose.faceHeight / 2,
+      width: pose.faceWidth,
+      height: pose.faceHeight,
+      centerX: pose.faceCenterX,
+      centerY: pose.faceCenterY,
+      roll: pose.roll,
+      mirrored: true,
+      source: "mediapipe-guided-capture"
+    };
+    state.salonCaptures.push({
+      viewId: definition.id,
+      label: definition.label,
+      frame,
+      pose: { ...pose },
+      detection,
+      hairCoverage: quality.hairCoverage,
+      thumbnail: frame.toDataURL("image/jpeg", 0.72)
+    });
+    if (state.salonCaptureIndex === 1) state.salonSideSign = Math.sign(pose.yaw);
+    state.salonCaptureIndex += 1;
+    renderSalonCapturePanel();
+    showToast(`${definition.label} view captured`);
+  } catch (error) {
+    console.error("Mirrorly salon capture check failed", error);
+    salonCaptureGuide.textContent = "Hair segmentation could not validate this view. Try again.";
+    showToast("Hair check failed; try the capture again");
+  } finally {
+    salonCaptureButton.disabled = false;
+  }
+}
+
+function createSalonPlacementDataUrl(capture, style) {
+  const placement = document.createElement("canvas");
+  placement.width = capture.frame.width;
+  placement.height = capture.frame.height;
+  const placementContext = placement.getContext("2d");
+  placementContext.drawImage(capture.frame, 0, 0);
+  const hair = getTintedHair(style, state.color);
+  if (!hair) throw new Error("The selected hairstyle asset is still loading");
+  const width = capture.pose.faceWidth / style.faceOpeningRatio;
+  const height = style.faceOpeningHeightRatio
+    ? capture.pose.faceHeight / style.faceOpeningHeightRatio
+    : width * hair.height / hair.width;
+  placementContext.save();
+  placementContext.translate(
+    capture.pose.faceCenterX + capture.pose.faceWidth * (style.faceOffsetXRatio || 0),
+    capture.pose.faceCenterY
+  );
+  placementContext.rotate(capture.pose.roll || 0);
+  placementContext.drawImage(hair, -width / 2, -height * style.faceCenterYRatio, width, height);
+  placementContext.restore();
+  return createAiUploadDataUrl(placement, "jpeg");
+}
+
+async function requestSalonResult(capture, styleId, colorName, styleReference, consistencyReference) {
+  const response = await fetch("/api/ai-render", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      portrait: createAiUploadDataUrl(capture.frame),
+      arPreview: createSalonPlacementDataUrl(capture, state.style),
+      styleReference,
+      consistencyReference: consistencyReference || undefined,
+      viewLabel: capture.viewId,
+      styleId,
+      colorName
+    })
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `The ${capture.label.toLowerCase()} salon result failed`);
+  const image = new Image();
+  image.decoding = "async";
+  image.src = result.image;
+  await image.decode();
+  return { viewId: capture.viewId, label: capture.label, image, dataUrl: result.image, timings: result.timings };
+}
+
+async function createSalonResults() {
+  state.salonError = "";
+  if (state.salonCaptures.length !== salonViewDefinitions.length || state.aiRendering) return;
+  if (!state.aiAvailable) {
+    showToast("AI access is unavailable");
+    return;
+  }
+  const requestedStyleId = state.style.id;
+  const requestedColorName = state.color.name;
+  const styleReference = createStyleReferenceDataUrl();
+  state.aiRendering = true;
+  state.salonResults = [];
+  salonCaptureButton.hidden = true;
+  salonGenerateButton.disabled = true;
+  salonCancelButton.disabled = true;
+  privacyStatus.textContent = "Uploading three selected stills for salon hairstyle generation";
+  try {
+    let consistencyReference = null;
+    for (let index = 0; index < state.salonCaptures.length; index += 1) {
+      if (state.style.id !== requestedStyleId || state.color.name !== requestedColorName) {
+        throw new Error("The selected style changed; start generation again");
+      }
+      state.salonCaptureIndex = index;
+      salonCaptureTitle.textContent = `Creating ${state.salonCaptures[index].label.toLowerCase()} result (${index + 1}/3)...`;
+      salonCaptureGuide.textContent = index === 0
+        ? "Creating the approved front hairstyle first."
+        : "Matching this angle to the approved front hairstyle.";
+      const result = await requestSalonResult(
+        state.salonCaptures[index],
+        requestedStyleId,
+        requestedColorName,
+        styleReference,
+        consistencyReference
+      );
+      state.salonResults.push(result);
+      consistencyReference ||= result.dataUrl;
+      renderSalonCapturePanel();
+    }
+    const front = state.salonResults[0];
+    state.salonSelectedView = front.viewId;
+    state.captured = true;
+    state.capturedFrame = state.salonCaptures[0].frame;
+    state.detection = state.salonCaptures[0].detection;
+    state.aiResult = front.image;
+    state.holdCapturedFrame = false;
+    state.liveAr = false;
+    window.MirrorlyAR?.setEnabled(false);
+    liveArButton.classList.remove("active");
+    liveArButton.textContent = "Start live AI AR";
+    liveArButton.disabled = true;
+    captureFaceButton.disabled = false;
+    captureFaceButton.textContent = "Return to live mirror";
+    snapshotButton.disabled = false;
+    cameraStatus.textContent = "Three realistic salon views ready";
+    privacyStatus.textContent = "AI processed three selected stills; live camera was not uploaded";
+    salonCaptureTitle.textContent = "Three salon views ready";
+    salonCaptureGuide.textContent = "Select a view below to inspect or save it.";
+    salonCapturePrivacy.textContent = "The generated images are held in this browser session and can be saved individually.";
+    renderSalonCapturePanel();
+    showToast("Three realistic salon views are ready");
+  } catch (error) {
+    console.error("Mirrorly salon result generation failed", error);
+    state.salonError = error.message || "Salon result generation failed";
+    salonCaptureGuide.textContent = error.message || "Salon result generation failed";
+    privacyStatus.textContent = "Captured stills remain local after the failed request";
+    showToast(error.message || "Salon result generation failed");
+  } finally {
+    state.aiRendering = false;
+    salonCancelButton.disabled = false;
+    salonGenerateButton.disabled = false;
+    renderSalonCapturePanel();
+  }
+}
+
+function selectSalonResult(index) {
+  const result = state.salonResults[index];
+  const capture = state.salonCaptures[index];
+  if (!result || !capture) return;
+  state.salonSelectedView = result.viewId;
+  state.capturedFrame = capture.frame;
+  state.detection = capture.detection;
+  state.aiResult = result.image;
+  cameraStatus.textContent = `${result.label} salon view`;
+  renderSalonCapturePanel();
+}
+
+async function returnToLiveMirror() {
+  state.captured = false;
+  state.capturedFrame = null;
+  state.detection = null;
+  state.aiResult = null;
+  state.holdCapturedFrame = false;
+  state.salonCaptureActive = false;
+  state.salonCaptureIndex = 0;
+  state.salonCaptures = [];
+  state.salonResults = [];
+  state.salonSideSign = 0;
+  salonCapturePanel.hidden = true;
+  captureFaceButton.textContent = "Create salon result";
+  captureFaceButton.disabled = true;
+  liveArButton.disabled = true;
+  snapshotButton.disabled = true;
+  cameraStatus.textContent = "Camera active";
+  trackingHint.textContent = "Restarting live hairstyle tracking";
   updateSelectedLook();
   renderStylePreviews();
-  showToast("Face captured - measuring automatic fit");
-  await measureCapturedFace(capturedFrame);
-  if (state.aiAvailable) {
-    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-    await createAiStill();
-  } else {
-    cameraStatus.textContent = "Face captured - AI merge unavailable";
-    showToast("Captured image held; AI merge is currently unavailable");
+  await startLiveAr({ automatic: true });
+}
+
+function cancelSalonCapture() {
+  if (state.captured && state.salonResults.length) {
+    salonCapturePanel.hidden = true;
+    return;
   }
+  state.salonCaptureActive = false;
+  state.salonCaptureIndex = 0;
+  state.salonCaptures = [];
+  state.salonResults = [];
+  state.salonSideSign = 0;
+  salonCapturePanel.hidden = true;
+  captureFaceButton.disabled = false;
+  liveArButton.disabled = false;
+  snapshotButton.disabled = false;
+  privacyStatus.textContent = "Live AI tracking stays on this laptop";
+  showToast("Salon capture cancelled");
+}
+async function captureFace() {
+  if (state.demo) {
+    showToast("Use the camera to create a real salon result");
+    return;
+  }
+  if (state.captured) {
+    await returnToLiveMirror();
+    return;
+  }
+  if (state.salonCaptureActive) return;
+  await beginSalonCapture();
 }
 
 function drawPhotorealisticHair(targetContext = context, targetCanvas = canvas, forceOverlay = false) {
@@ -2242,6 +2559,9 @@ document.querySelector("#startCameraButton").addEventListener("click", startCame
 document.querySelector("#demoButton").addEventListener("click", startDemo);
 liveArButton.addEventListener("click", toggleLiveAr);
 captureFaceButton.addEventListener("click", captureFace);
+salonCaptureButton?.addEventListener("click", captureSalonView);
+salonGenerateButton?.addEventListener("click", createSalonResults);
+salonCancelButton?.addEventListener("click", cancelSalonCapture);
 snapshotButton.addEventListener("click", saveSnapshot);
 beforeAfterButton?.addEventListener("pointerdown", () => setBeforeMode(true));
 beforeAfterButton?.addEventListener("pointerup", () => setBeforeMode(false));

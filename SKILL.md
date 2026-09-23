@@ -176,7 +176,7 @@ The 2026-09-14 request explicitly authorized optimizing both Live AI hair and Op
 - Show elapsed live-generation time. `MirrorlyAiDiagnostics.getMetrics()` records numeric preparation, request, API, post-processing, and total milliseconds for both flows in browser session memory only. Server responses expose numeric timings and `/api/ai-status` exposes the 20-second target, not a deadline. Never include portraits, keys, or landmarks in diagnostics.
 - Twenty seconds is a target, not a confirmed benchmark or guarantee. Do not abort paid generation at 20 seconds and call that a speed improvement. Measure a newly consented generation before reporting real latency; model load, remote generation, and network variation remain outside the browser's control.
 
-Validate with `npm run check`, `npm test`, and `npm run test:browser` against the restarted server. The current suite has 35 unit tests plus real Edge/WebGL checks for 8 styles x 5 colors, decoded masks/JPEG references, full-frame resizing, one local warmup, both actual frontend actions, DeepAR's 40-look manifest, and numeric timings. API responses are mocked; tests use generic fixtures and make no paid requests. The eight shape-reference uploads measured 11788023 bytes before versus 620157 bytes after (about 95% smaller); this is a transport comparison, not proof of 20-second AI generation.
+Validate with `npm run check`, `npm test`, and `npm run test:browser` against the restarted server. The current suite has 36 unit tests plus real Edge/WebGL checks for 8 styles x 5 colors, decoded masks/JPEG references, full-frame resizing, one local warmup, both actual frontend actions, DeepAR's 40-look manifest, and numeric timings. API responses are mocked; tests use generic fixtures and make no paid requests. The eight shape-reference uploads measured 11788023 bytes before versus 620157 bytes after (about 95% smaller); this is a transport comparison, not proof of 20-second AI generation.
 
 ## AI key and billing operations
 
@@ -230,7 +230,7 @@ All eight base hairstyle effects are exported from their own imported GLB and in
 - Use `http://localhost:4173/` for the licensed camera test. The current license rejects `127.0.0.1`; `public/index.html` redirects that hostname to `localhost` before DeepAR starts. A DeepAR watermark is controlled by the DeepAR license tier and is separate from mesh alignment.
 - Keep the editable project directories as local working sources unless the user explicitly requests committing their large generated caches. Commit the compiled app effects and this reproducible transform record. For future fitting, change one style's `Hair` node only, reopen the saved project, inspect against the Studio head, export, replace its app file, and rerun the DeepAR tests.
 - Studio head-reference calibration is complete. A final real-camera review should check frontal fit and moderate yaw on more than one person before production sign-off; hairstyle geometry cannot guarantee identical hairline coverage for every head shape.
-- Validation on 2026-09-22 passed `npm run check`, all 35 unit tests, and the Edge/WebGL browser suite. The running licensed configuration reported 40 of 40 looks across eight unique base effects.
+- Validation on 2026-09-22 passed `npm run check`, all 36 unit tests, and the Edge/WebGL browser suite. The running licensed configuration reported 40 of 40 looks across eight unique base effects.
 
 ### Feather and Curtain correction (2026-09-22)
 
@@ -241,6 +241,15 @@ All eight base hairstyle effects are exported from their own imported GLB and in
 - The depth-only head occluder uses `Material.mat` with `writeColor=false` and `writeDepth=true`. Do not replace it with visible `lambert1.mat`.
 - A tracked 3D hair mesh can cover and occlude parts of the face, but it cannot remove the customer's real hair or reconstruct the background hidden by long hair. Short cuts on a person with long hair will still show the real hair outside the mesh. Use the AI replacement flow when the preview must erase or replace existing hair.
 - While DeepAR is active, keep `Replace real hair with AI` available when the AI endpoint is configured. Its first click must pause and hide DeepAR, initialize the local MediaPipe tracker against the same camera video, wait briefly for a forward-facing tracked pose, and then run the existing one-frame `/api/ai-ar-hair` flow. After generation, the locally tracked AI hair and background-repair layers replace the 3D effect. Do not stack DeepAR and the AI replacement or upload continuously.
+### Guided salon result (2026-09-23)
+
+- `public/models/hair_segmenter.tflite` is the served and tracked Hair Segmenter. A same-hash copy at the repository root is redundant and must not be referenced by browser code.
+- `Create salon result` replaces the old automatic optional-photo action. It guides front, first side, and opposite-side captures. Accept a view only when local MediaPipe tracking has a plausible face size, limited pitch/roll, the required yaw range, and Hair Segmenter coverage between the conservative minimum and maximum.
+- Capture checks are local. Do not upload camera frames while positioning the customer. After all three views pass, the separate `Generate three salon views` action explicitly authorizes three image-edit requests.
+- Generate the front view first. Pass its JPEG result as `consistencyReference` for the left and right requests. The server uses it only to match haircut identity, part, length, density, texture, and color while preserving each original pose and face.
+- Keep all three results in browser session memory, allow selecting and saving each view, and clear them when the style or color changes. Reuse the accepted local captures for an explicit regeneration; do not make automatic paid calls.
+- DeepAR remains an approximate instant preview. Do not claim that its GLB removes camera hair or that three stills provide unrestricted real-time Snapchat replacement.
+- Validation now includes 36 unit tests plus the Edge/WebGL suite. The browser suite mocks all AI responses, confirms exactly three guided edit requests, and verifies that only the side requests include the approved front consistency reference.
 ## Git repository and safe publishing
 
 Keep the Git repository scoped to `MirrorlyLaptopApp/`. The configured remote is:

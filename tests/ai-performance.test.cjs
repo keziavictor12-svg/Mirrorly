@@ -118,6 +118,22 @@ for (const endpoint of ['renderAiHairstyle', 'renderLiveAiHairLayer']) {
   });
 }
 
+test('guided side view includes one approved front consistency reference', async () => {
+  const { hooks, calls } = loadServer();
+  const response = await invoke(hooks.renderAiHairstyle, {
+    ...body(),
+    viewLabel: 'left',
+    consistencyReference: 'data:image/jpeg;base64,/9j/2Q=='
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  const form = calls[0].form;
+  assert.equal(form.getAll('image[]').length, 4);
+  assert.equal(form.getAll('image[]')[3].name, 'approved-front-hairstyle.jpg');
+  assert.match(form.get('prompt'), /guided three-angle salon capture/);
+  assert.match(form.get('prompt'), /approved front hairstyle result/);
+  assert.match(form.get('prompt'), /left view/);
+});
 test('live edit mask must match the PNG portrait dimensions before any paid request', async () => {
   const { hooks, calls } = loadServer();
   const response = await invoke(hooks.renderLiveAiHairLayer, { ...body(), editMask: png(640, 480) });

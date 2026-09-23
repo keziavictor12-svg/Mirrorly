@@ -44,10 +44,27 @@
           <button id="startCameraButton" class="primary-button">Start live AI mirror</button>
           <button id="demoButton" class="secondary-button">Try demo mode</button>
         </div>
+        <section id="salonCapturePanel" class="salon-capture-panel" hidden aria-label="Guided salon capture">
+          <div class="salon-capture-heading">
+            <div>
+              <span class="salon-capture-kicker">REALISTIC SALON RESULT</span>
+              <strong id="salonCaptureTitle">Capture the front view</strong>
+            </div>
+            <button id="salonCancelButton" class="salon-close-button" type="button" aria-label="Cancel salon capture">×</button>
+          </div>
+          <p id="salonCaptureGuide">Face forward, keep your full hair inside the frame, and hold still.</p>
+          <div id="salonCaptureSteps" class="salon-capture-steps" aria-label="Capture progress"></div>
+          <div id="salonCaptureResults" class="salon-capture-results" hidden></div>
+          <div class="salon-capture-actions">
+            <button id="salonCaptureButton" class="primary-button" type="button">Capture front</button>
+            <button id="salonGenerateButton" class="primary-button" type="button" hidden>Generate three salon views</button>
+          </div>
+          <small id="salonCapturePrivacy">Capture checks run locally. Generation uploads the three selected stills only after you press Generate.</small>
+        </section>
         <div class="preview-toolbar">
           <div class="toolbar-group">
             <button id="liveArButton" class="glass-button ar-button" disabled>Start live AI AR</button>
-            <button id="captureFaceButton" class="capture-button" disabled>Optional AI photo</button>
+            <button id="captureFaceButton" class="capture-button" disabled>Create salon result</button>
           </div>
           <button id="snapshotButton" class="glass-button" disabled>Save preview</button>
         </div>

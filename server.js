@@ -137,10 +137,18 @@ async function renderAiHairstyle(request, response) {
     const portrait = decodePngDataUrl(body.portrait, "Portrait");
     const arPreview = decodeReferenceDataUrl(body.arPreview, "AR preview");
     const styleReference = decodeReferenceDataUrl(body.styleReference, "Style reference");
+    const consistencyReference = body.consistencyReference
+      ? decodeReferenceDataUrl(body.consistencyReference, "Approved front hairstyle reference")
+      : null;
+    const viewLabel = new Set(["front", "left", "right"]).has(body.viewLabel) ? body.viewLabel : "front";
     const portraitSize = readPngDimensions(portrait);
     const outputSize = chooseAiOutputSize(portraitSize.width, portraitSize.height);
     const prompt = [
       "The first image is the original portrait to edit. The second image is an AR placement preview showing the intended cut, color, approximate length, and placement. The third image is a hairstyle shape reference only.",
+      `This is the ${viewLabel} view of a guided three-angle salon capture. Preserve this exact camera angle and head pose.`,
+      consistencyReference
+        ? "The fourth image is the approved front hairstyle result for the same person and selection. Match its haircut identity, part, length, density, texture, and color while preserving the face and pose from the first image."
+        : "Establish a clear, repeatable hairstyle identity that matching side views can follow.",
       `Replace only the person's existing hair with ${hairstyle} in ${body.colorName}.`,
       "Preserve the exact face identity, facial features, expression, skin tone, head position, body, clothing, accessories, chair, background, camera angle, crop, and webcam lighting.",
       "Merge the hairstyle into the photograph with a natural scalp attachment, believable roots and hairline, soft temple contact, individual strands, realistic density and gravity, and matching highlights, shadows, sharpness, noise, and color spill.",
@@ -155,6 +163,9 @@ async function renderAiHairstyle(request, response) {
     form.append("image[]", new Blob([portrait], { type: "image/png" }), "portrait.png");
     form.append("image[]", new Blob([arPreview.data], { type: arPreview.type }), "ar-placement-preview." + arPreview.extension);
     form.append("image[]", new Blob([styleReference.data], { type: styleReference.type }), "hairstyle-reference." + styleReference.extension);
+    if (consistencyReference) {
+      form.append("image[]", new Blob([consistencyReference.data], { type: consistencyReference.type }), "approved-front-hairstyle." + consistencyReference.extension);
+    }
     form.append("prompt", prompt);
     form.append("quality", aiRenderSettings.quality);
     form.append("output_format", aiRenderSettings.outputFormat);

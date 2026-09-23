@@ -362,7 +362,7 @@ async function main() {
           if (url !== '/api/ai-ar-hair' && url !== '/api/ai-render') throw new Error('Unexpected endpoint in AI client fixture');
           const payload = JSON.parse(options.body); aiCalls.push({ url, payload });
           if (!payload.portrait.startsWith('data:image/png;') || !payload.arPreview.startsWith('data:image/jpeg;') || !payload.styleReference.startsWith('data:image/jpeg;')) throw new Error('Incorrect optimized upload formats');
-          if (url === '/api/ai-render' && (!state.holdCapturedFrame || state.aiResult)) throw new Error('Optional photo did not hold the original capture');
+          if (url === '/api/ai-render' && !payload.viewLabel && (!state.holdCapturedFrame || state.aiResult)) throw new Error('Optional photo did not hold the original capture');
           return { ok: true, json: async () => ({ image: syntheticResult, timings: { apiMs: 13 } }) };
         };
         captureLivePortrait = () => portrait;
@@ -380,6 +380,20 @@ async function main() {
         await createAiStill();
         if (!state.aiResult || state.aiPhotoTimings?.apiMs !== 13 || state.holdCapturedFrame) throw new Error('Actual optional photo action failed');
         if (aiCalls.length !== 2 || aiCalls[0].url !== '/api/ai-ar-hair' || aiCalls[1].url !== '/api/ai-render') throw new Error('AI action silently made extra requests');
+        state.aiResult = null; state.holdCapturedFrame = false; state.captured = false;
+        state.salonCaptureActive = true; state.salonCaptureIndex = 3; state.salonResults = [];
+        state.salonCaptures = salonViewDefinitions.map((view, index) => ({
+          ...view,
+          viewId: view.id,
+          frame: portrait,
+          pose: { ...capturePose, yaw: index === 0 ? 0 : (index === 1 ? .3 : -.3) },
+          detection: fixtureCapture.pose,
+          thumbnail: syntheticResult
+        }));
+        await createSalonResults();
+        if (state.salonResults.length !== 3 || state.aiResult !== state.salonResults[0]?.image) throw new Error('Guided salon generation did not retain all three results: results=' + state.salonResults.length + ', calls=' + aiCalls.length + ', guide=' + salonCaptureGuide.textContent + ', error=' + state.salonError);
+        if (aiCalls.length !== 5 || aiCalls.slice(2).some(call => call.url !== '/api/ai-render')) throw new Error('Guided salon generation did not make exactly three explicit edits');
+        if (aiCalls[2].payload.consistencyReference || !aiCalls[3].payload.consistencyReference || !aiCalls[4].payload.consistencyReference) throw new Error('Side views do not reuse the approved front hairstyle');
         const metrics = window.MirrorlyAiDiagnostics.getMetrics();
         if (JSON.stringify(metrics).includes('data:image') || !Object.values(metrics).every(m => Object.values(m).every(n => Number.isFinite(n) && n >= 0))) throw new Error('AI diagnostics leaked pixels or invalid timing');
       } finally {
@@ -445,7 +459,26 @@ async function main() {
         || typeof window.MirrorlyDeepAR.getCanvas !== 'function') {
         throw new Error('DeepAR provider adapter is not available to the main Mirrorly page');
       }
-      const previousLiveAr = state.liveAr;
+      if (!salonCapturePanel || !salonCaptureButton || !salonGenerateButton
+        || typeof beginSalonCapture !== 'function' || typeof createSalonResults !== 'function') {
+        throw new Error('Guided three-view salon workflow is unavailable');
+      }
+      const qualityHair = { data: new Float32Array(1000) };
+      qualityHair.data.fill(1, 0, 100);
+      const qualityFrame = { width: 1280, height: 720 };
+      const baseQualityPose = { yaw: 0, pitch: 0, roll: 0, faceWidth: 300 };
+      if (!assessSalonCapture(qualityFrame, baseQualityPose, qualityHair, 0).valid) {
+        throw new Error('Valid front salon capture was rejected');
+      }
+      if (assessSalonCapture(qualityFrame, { ...baseQualityPose, yaw: .35 }, qualityHair, 0).valid) {
+        throw new Error('Turned face passed the front salon capture gate');
+      }
+      const previousSideSign = state.salonSideSign;
+      state.salonSideSign = 1;
+      if (!assessSalonCapture(qualityFrame, { ...baseQualityPose, yaw: -.3 }, qualityHair, 2).valid) {
+        throw new Error('Valid opposite-side salon capture was rejected');
+      }
+      state.salonSideSign = previousSideSign;      const previousLiveAr = state.liveAr;
       const previousDeepAr = state.deepArActive;
       const previousAiAvailable = state.aiAvailable;
       state.liveAr = true;
@@ -466,7 +499,7 @@ async function main() {
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
         numericAiTimings: true, referencePngBytes, referenceJpegBytes,
         demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
-        deepArAdapter: true, deepArAiReplacement: true };
+        deepArAdapter: true, deepArAiReplacement: true, guidedSalonCapture: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);

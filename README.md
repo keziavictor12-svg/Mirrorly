@@ -73,7 +73,7 @@ The local server exposes the installed SDK under `/vendor/deepar/`. `GET /api/de
 
 The tracker fits head position/scale using pose-projected canonical landmarks and quaternion filtering. Its 468-landmark depth occluder seals eye/mouth holes so rear hair cannot leak through them. The personalized AI layer undoes the captured pose and attaches to the current head origin on a subdivided, measured-depth strip, preserving crop offsets and image orientation. Both the renderer and compositor suppress temporary catalog hair, pending AI, and mismatched looks. Diagnostics are available through `MirrorlyAR.getStatus().metrics` without exposing camera pixels. Pose rendering follows the [MediaPipe transformation-matrix model](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker).
 
-Run `npm test` for 35 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
+Run `npm test` for 36 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
 
 The foreground mask now follows the captured landmark face contour instead of a generic oval. Head-connected semantic hair retains its full length; generated-image borders receive a localized alpha fade when clipped. Hair and background repairs are separate: frozen room pixels stay at capture-screen coordinates and fade with head motion instead of forming dark rotating patches. Live camera pixels receive no cinematic wash or vignette. Regressions use an attributed generic 468-vertex canonical model, not customer photographs.
 
@@ -89,3 +89,9 @@ The foreground mask now follows the captured landmark face contour instead of a 
 ## Suggested next milestone
 
 Test identity preservation and hairstyle consistency across a diverse salon evaluation set, add an explicit consent/retention policy for production AI uploads, then package the application for Windows.
+
+## Guided salon result
+
+`Create salon result` starts a local quality-gated front, left, and right capture. Mirrorly checks face pose, distance, roll, pitch, and visible hair coverage with MediaPipe before accepting each view. No frame uploads during these checks. After all three views pass, `Generate three salon views` explicitly starts three AI edits. The front result establishes the selected cut and color; both side requests include that approved front result as a consistency reference. The three generated views stay in browser session memory for inspection and individual saving.
+
+This workflow is the realistic salon output. DeepAR remains an immediate approximate preview and does not remove real hair. Three-view generation makes three paid image API calls only after the user presses Generate; selection changes never trigger those calls automatically.
