@@ -452,13 +452,6 @@ async function main() {
       const gl = canvas.getContext('webgl2');
       const glError = gl?.getError();
       if (glError !== 0) throw new Error('WebGL error ' + glError);
-      if (!window.MirrorlyDeepAR
-        || typeof window.MirrorlyDeepAR.start !== 'function'
-        || typeof window.MirrorlyDeepAR.applyLook !== 'function'
-        || typeof window.MirrorlyDeepAR.pause !== 'function'
-        || typeof window.MirrorlyDeepAR.getCanvas !== 'function') {
-        throw new Error('DeepAR provider adapter is not available to the main Mirrorly page');
-      }
       if (!salonCapturePanel || !salonCaptureButton || !salonGenerateButton
         || typeof beginSalonCapture !== 'function' || typeof createSalonResults !== 'function') {
         throw new Error('Guided three-view salon workflow is unavailable');
@@ -478,18 +471,8 @@ async function main() {
       if (!assessSalonCapture(qualityFrame, { ...baseQualityPose, yaw: -.3 }, qualityHair, 2).valid) {
         throw new Error('Valid opposite-side salon capture was rejected');
       }
-      state.salonSideSign = previousSideSign;      const previousLiveAr = state.liveAr;
-      const previousDeepAr = state.deepArActive;
+      state.salonSideSign = previousSideSign;
       const previousAiAvailable = state.aiAvailable;
-      state.liveAr = true;
-      state.deepArActive = true;
-      state.aiAvailable = true;
-      updateLiveAiHairButton();
-      if (liveAiHairButton.disabled || liveAiHairButton.textContent !== 'Replace real hair with AI') {
-        throw new Error('DeepAR does not offer the AI hair replacement handoff');
-      }
-      state.liveAr = previousLiveAr;
-      state.deepArActive = previousDeepAr;
       state.aiAvailable = previousAiAvailable;
       updateLiveAiHairButton();
       return { passed: true, checks, glError, occluder: stale.metrics.occluder, modelFallback: true, layeredFallback: true, ghostPixels: 0,
@@ -499,7 +482,7 @@ async function main() {
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
         numericAiTimings: true, referencePngBytes, referenceJpegBytes,
         demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
-        deepArAdapter: true, deepArAiReplacement: true, guidedSalonCapture: true };
+        guidedSalonCapture: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);

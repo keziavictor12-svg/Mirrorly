@@ -28,24 +28,6 @@ Both Live AI hair and Optional AI Photo retain medium quality and all three refe
 
 Twenty seconds is a target, not a guaranteed or measured completion time. The local segmenter warms without making an API call; no automatic paid retries are added. Session-only numeric timings are available at `MirrorlyAiDiagnostics.getMetrics()`. Restart the Node server after backend updates: refreshing an old server can cause a JPEG preview to be rejected as "must be a PNG image".
 
-## DeepAR integration
-
-DeepAR Web SDK 5.6.22 is installed locally and wired into Mirrorly's existing camera flow. It reuses the current video element, loads the exact effect matching the selected style/color, switches effects without replacing the salon UI, pauses with Live AR, and supports local snapshots. Validate the SDK, license, camera, and bundled test effect independently at `http://localhost:4173/deepar-test.html`.
-
-The DeepAR Web license is read from the ignored local environment file or the server environment. Browser license keys are necessarily delivered to the Web SDK, but the value must never be committed, printed, or placed in documentation.
-
-```powershell
-$env:DEEPAR_LICENSE_KEY='your-web-sdk-license-key'
-$env:DEEPAR_EFFECT_URL='/assets/deepar/effects/your-test-effect.deepar' # isolated smoke test only
-npm start
-```
-
-Place eight exported DeepAR Studio hairstyle effects under `public/assets/deepar/effects/` as `bob.deepar`, `feather.deepar`, `v-cut.deepar`, `u-cut.deepar`, `crew-cut.deepar`, `buzz-cut.deepar`, `curtain-bangs.deepar`, and `skin-fade.deepar`. Each project must expose a visible mesh node named `Hair` using `MeshRenderer`. Imported PBR materials use the `u_diffuse` vec4 uniform for runtime color; the adapter also tries `u_baseColorFactor` and `u_color` for compatible custom shaders. The older 8 x 5 color-specific filenames remain supported as overrides. Mirrorly activates DeepAR only for selections with an installed effect and immediately uses the local renderer for missing looks, preventing a stale effect from remaining visible.
-
-The supplied DeepAR free package is available in the isolated sample lab when its effects are installed under `public/assets/deepar/samples/`. They can be switched live at `http://localhost:4173/deepar-test.html`. They are intentionally not assigned to salon choices because the package contains masks, makeup, backgrounds, particles, and novelty head effects. The original package includes reusable FBX models, textures, shaders, and a script, but no `.deeparproj` project; use DeepAR Studio's Import Effect or asset workflow to modify a sample and export a new `.deepar` file.
-
-The local server exposes the installed SDK under `/vendor/deepar/`. `GET /api/deepar-config` supplies same-origin browser configuration and readiness counts. This integration does not change the OpenAI key, `/api/ai-render`, or Optional AI Photo behavior.
-
 ## Included in this first build
 
 - Local laptop webcam preview
@@ -94,4 +76,4 @@ Test identity preservation and hairstyle consistency across a diverse salon eval
 
 `Create salon result` starts a local quality-gated front, left, and right capture. Mirrorly checks face pose, distance, roll, pitch, and visible hair coverage with MediaPipe before accepting each view. No frame uploads during these checks. After all three views pass, `Generate three salon views` explicitly starts three AI edits. The front result establishes the selected cut and color; both side requests include that approved front result as a consistency reference. The three generated views stay in browser session memory for inspection and individual saving.
 
-This workflow is the realistic salon output. DeepAR remains an immediate approximate preview and does not remove real hair. Three-view generation makes three paid image API calls only after the user presses Generate; selection changes never trigger those calls automatically.
+This workflow is the realistic salon output. The local live renderer is an approximate preview and does not remove real hair. Three-view generation makes three paid image API calls only after the user presses Generate; selection changes never trigger those calls automatically.

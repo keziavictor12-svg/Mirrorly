@@ -1,7 +1,6 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const { getDeepArConfiguration } = require("./deepar-config.cjs");
 
 function loadLocalEnvironment(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -24,7 +23,6 @@ loadLocalEnvironment(path.join(__dirname, ".env.local"));
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4173);
 const publicDir = path.join(__dirname, "public");
-const deepArDistDir = path.join(__dirname, "node_modules", "deepar");
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -32,7 +30,6 @@ const mimeTypes = {
   ".mjs": "text/javascript; charset=utf-8",
   ".glb": "model/gltf-binary",
   ".wasm": "application/wasm",
-    ".deepar": "application/octet-stream",
     ".bin": "application/octet-stream",
     ".task": "application/octet-stream",
     ".png": "image/png",
@@ -327,35 +324,8 @@ const server = http.createServer((request, response) => {
     return;
   }
 
-  if (request.method === "GET" && decodedPath === "/api/deepar-config") {
-    sendJson(response, 200, getDeepArConfiguration(publicDir));
-    return;
-  }
-
   if (request.method === "POST" && decodedPath === "/api/ai-render") {
     renderAiHairstyle(request, response);
-    return;
-  }
-
-  const deepArPrefix = "/vendor/deepar/";
-  if (request.method === "GET" && decodedPath.startsWith(deepArPrefix)) {
-    const relativePath = decodedPath.slice(deepArPrefix.length);
-    const filePath = path.resolve(deepArDistDir, relativePath);
-    if (!filePath.startsWith(deepArDistDir + path.sep)) {
-      response.writeHead(403).end("Forbidden");
-      return;
-    }
-    fs.readFile(filePath, (error, data) => {
-      if (error) {
-        response.writeHead(error.code === "ENOENT" ? 404 : 500).end("Not found");
-        return;
-      }
-      response.writeHead(200, {
-        "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream",
-        "Cache-Control": "no-store"
-      });
-      response.end(data);
-    });
     return;
   }
 

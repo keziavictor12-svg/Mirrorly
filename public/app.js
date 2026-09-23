@@ -1,7 +1,6 @@
 const canvas = document.querySelector("#previewCanvas");
 const context = canvas.getContext("2d");
 const arCanvas = document.querySelector("#arCanvas");
-const deepArRoot = document.querySelector("#deeparRoot");
 const video = document.querySelector("#cameraVideo");
 const emptyState = document.querySelector("#emptyState");
 const cameraStatus = document.querySelector("#cameraStatus");
@@ -294,9 +293,6 @@ const state = {
   captured: false,
   capturedFrame: null,
   liveAr: false,
-  deepArActive: false,
-  deepArSwitching: false,
-  deepArSwitchVersion: 0,
   arReady: false,
   arLoading: false,
   aiAvailable: false,
@@ -324,45 +320,6 @@ function currentLookKey() {
   return state.style.id + ':' + state.color.name;
 }
 
-async function activateLocalLiveRenderer(message) {
-  window.MirrorlyDeepAR?.pause();
-  state.deepArActive = false;
-  state.deepArSwitching = false;
-  state.deepArSwitchVersion += 1;
-  if (deepArRoot) deepArRoot.hidden = true;
-  await window.MirrorlyAR.initialize(arCanvas, video);
-  state.arReady = true;
-  syncArHair();
-  window.MirrorlyAR.setEnabled(true);
-  window.MirrorlyAR.prepareHairSegmentation?.().catch(() => {});
-  arCanvas.hidden = true;
-  liveArButton.textContent = 'Pause live AI AR';
-  cameraStatus.textContent = 'Live AI AR active';
-  privacyStatus.textContent = 'Live tracking is local; one frame uploads only when AI hair is requested';
-  trackingHint.textContent = message;
-  updateLiveAiHairButton();
-}
-
-async function syncDeepArLook() {
-  if (!state.liveAr || !state.deepArActive || !window.MirrorlyDeepAR) return;
-  const switchVersion = ++state.deepArSwitchVersion;
-  state.deepArSwitching = true;
-  trackingHint.textContent = 'Switching the live DeepAR hairstyle...';
-  try {
-    const applied = await window.MirrorlyDeepAR.applyLook(state.style.id, state.color.name);
-    if (switchVersion !== state.deepArSwitchVersion) return;
-    if (!applied) throw new Error('Matching DeepAR hairstyle effect is not installed');
-    if (state.deepArActive) trackingHint.textContent = 'DeepAR hairstyle effect active';
-  } catch (error) {
-    if (switchVersion !== state.deepArSwitchVersion) return;
-    console.error('Mirrorly DeepAR look switch failed', error);
-    await activateLocalLiveRenderer('DeepAR effect unavailable - local live renderer active');
-    showToast('This look uses the local renderer until its DeepAR effect is installed');
-  } finally {
-    if (switchVersion === state.deepArSwitchVersion) state.deepArSwitching = false;
-  }
-}
-
 // Session-only timing numbers, never portraits, landmarks, or API credentials.
 window.MirrorlyAiDiagnostics = { getMetrics: () => ({
   live: state.liveAiTimings ? { ...state.liveAiTimings } : null,
@@ -378,17 +335,6 @@ function usesTrue3dLive(style) {
 }
 
 function updateLiveAiHairButton() {
-  if (state.deepArActive) {
-    liveAiHairButton.disabled = !state.liveAr || !state.aiAvailable || state.liveAiHairGenerating;
-    liveAiHairButton.classList.remove('active');
-    liveAiHairButton.textContent = state.liveAiHairGenerating
-      ? 'Preparing AI replacement...'
-      : 'Replace real hair with AI';
-    liveAiHairButton.title = state.aiAvailable
-      ? 'Capture one frame and replace the existing hair with the selected cut and color'
-      : 'Configure OpenAI API access to replace the existing hair';
-    return;
-  }
   const active = Boolean(state.liveAiHair && state.liveAiHairKey === currentLookKey());
   liveAiHairButton.disabled = !state.liveAr || !state.aiAvailable || state.liveAiHairGenerating;
   liveAiHairButton.classList.toggle('active', active);
@@ -535,7 +481,6 @@ function createStyleButtons() {
           : "This hairstyle is ready for live AI AR");
       renderStylePreviews();
       syncArHair();
-      syncDeepArLook();
       scheduleAutomaticAiStill();
     });
     styleGrid.append(button);
@@ -573,7 +518,6 @@ function createColorButtons() {
       updateSelectedLook();
       renderStylePreviews();
       syncArHair();
-      syncDeepArLook();
       scheduleAutomaticAiStill();
     });
     colorGrid.append(button);
@@ -626,10 +570,6 @@ async function startCamera() {
 }
 
 function syncArHair() {
-  if (state.deepArActive) {
-    updateLiveAiHairButton();
-    return;
-  }
   if (!state.arReady || !window.MirrorlyAR) return;
   const useGeneratedHair = state.liveAiHair && state.liveAiHairKey === currentLookKey();
   const hair = useGeneratedHair
@@ -1152,7 +1092,7 @@ function waitForLocalFaceTracking(timeoutMs = 6000) {
         resolve(status);
         return;
       }
-      if (!state.liveAr || state.deepArActive || performance.now() - startedAt >= timeoutMs) {
+      if (!state.liveAr || performance.now() - startedAt >= timeoutMs) {
         resolve(null);
         return;
       }
@@ -1172,29 +1112,7 @@ async function createLiveAiHair() {
     showToast('OpenAI API access is required for AI hair generation');
     return;
   }
-  let arStatus;
-  if (state.deepArActive) {
-    state.liveAiHairGenerating = true;
-    state.liveAiHairStartedAt = Date.now();
-    updateLiveAiHairButton();
-    trackingHint.textContent = 'Preparing local face tracking for AI hair replacement';
-    try {
-      await activateLocalLiveRenderer('Hold still and face forward while local tracking starts');
-      arStatus = await waitForLocalFaceTracking();
-    } catch (error) {
-      console.error('Mirrorly AI replacement handoff failed', error);
-    } finally {
-      state.liveAiHairGenerating = false;
-      updateLiveAiHairButton();
-    }
-    if (!arStatus) {
-      trackingHint.textContent = 'Camera ready - hold your face in view and retry AI replacement';
-      showToast('Face tracking was not ready; hold still and try again');
-      return;
-    }
-  } else {
-    arStatus = window.MirrorlyAR?.getStatus();
-  }
+  const arStatus = window.MirrorlyAR?.getStatus();
   if (!arStatus?.tracking || !arStatus.pose?.faceWidth) {
     showToast('Hold your face in view, then try again');
     return;
@@ -1334,11 +1252,6 @@ async function measureCapturedFace(capturedFrame) {
 function stopLiveAr(showMessage = true) {
   state.liveSessionVersion += 1;
   state.liveAr = false;
-  if (state.deepArActive) window.MirrorlyDeepAR?.pause();
-  state.deepArActive = false;
-  state.deepArSwitching = false;
-  state.deepArSwitchVersion += 1;
-  if (deepArRoot) deepArRoot.hidden = true;
   window.MirrorlyAR?.setEnabled(false);
   arCanvas.hidden = true;
   liveArButton.classList.remove("active");
@@ -1371,32 +1284,6 @@ async function startLiveAr({ automatic = false } = {}) {
   liveArButton.textContent = "Loading live AI AR...";
   trackingHint.textContent = "Loading the local AI face tracker";
   try {
-    const deepArResult = await window.MirrorlyDeepAR?.start({
-      videoElement: video,
-      root: deepArRoot,
-      styleId: state.style.id,
-      colorName: state.color.name
-    });
-    if (deepArResult?.active) {
-      state.liveAr = true;
-      state.deepArActive = true;
-      state.liveSessionVersion += 1;
-      window.MirrorlyAR?.setEnabled(false);
-      arCanvas.hidden = true;
-      liveArButton.disabled = false;
-      liveArButton.classList.add("active");
-      liveArButton.textContent = "Pause DeepAR";
-      captureFaceButton.disabled = false;
-      snapshotButton.disabled = false;
-      cameraStatus.textContent = "DeepAR active";
-      trackingHint.textContent = "DeepAR hairstyle effect active";
-      privacyStatus.textContent = "Live DeepAR processing stays in this browser";
-      updateSelectedLook();
-      updateLiveAiHairButton();
-      showToast("Real-time DeepAR hairstyle effect active");
-      return true;
-    }
-
     await window.MirrorlyAR.initialize(arCanvas, video);
     state.arReady = true;
     syncArHair();
@@ -2372,7 +2259,7 @@ function render(now = 0) {
   } else if (state.holdCapturedFrame && state.capturedFrame) {
     // Keep the untouched captured portrait visible while the hidden AR
     // placement guide is prepared and the final AI edit is processing.
-  } else if (state.liveAr && !state.deepArActive) {
+  } else if (state.liveAr) {
     window.MirrorlyAR?.update(now, {
       x: Number(controls.x.value),
       y: Number(controls.y.value),
@@ -2401,27 +2288,20 @@ function setBeforeMode(enabled) {
 
 function saveSnapshot() {
   const snapshotCanvas = document.createElement("canvas");
-  const deepArCanvas = state.deepArActive ? window.MirrorlyDeepAR?.getCanvas() : null;
-  snapshotCanvas.width = deepArCanvas?.width || canvas.width;
-  snapshotCanvas.height = deepArCanvas?.height || canvas.height;
+  snapshotCanvas.width = canvas.width;
+  snapshotCanvas.height = canvas.height;
   const snapshotContext = snapshotCanvas.getContext("2d");
-  if (deepArCanvas) {
-    snapshotContext.drawImage(deepArCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
-  } else {
-    snapshotContext.drawImage(canvas, 0, 0);
-    if (state.liveAr && !arCanvas.hidden) snapshotContext.drawImage(arCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
-  }
+  snapshotContext.drawImage(canvas, 0, 0);
+  if (state.liveAr && !arCanvas.hidden) snapshotContext.drawImage(arCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
   snapshotCanvas.toBlob((blob) => {
     if (!blob) return;
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    const mode = state.aiResult ? "ai-realistic" : (state.deepArActive ? "deepar" : "3d");
+    const mode = state.aiResult ? "ai-realistic" : "3d";
     link.download = `mirrorly-${mode}-${state.style.id}-${new Date().toISOString().replaceAll(":", "-")}.png`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    showToast(state.aiResult
-      ? "Realistic AI still saved on this laptop"
-      : (state.deepArActive ? "DeepAR preview saved on this laptop" : "3D preview saved on this laptop"));
+    showToast(state.aiResult ? "Realistic AI still saved on this laptop" : "3D preview saved on this laptop");
   }, "image/png");
 }
 
@@ -2574,7 +2454,6 @@ beforeAfterButton?.addEventListener("keyup", () => setBeforeMode(false));
 window.addEventListener("beforeunload", () => {
   video.srcObject?.getTracks().forEach((track) => track.stop());
   window.MirrorlyAR?.dispose();
-  window.MirrorlyDeepAR?.destroy();
 });
 
 createStyleButtons();

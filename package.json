@@ -5,14 +5,13 @@
   "description": "Local 3D salon hairstyle preview with eight cuts and five colours",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check deepar-config.cjs && node --check public/app.js && node --check public/ar.js && node --check public/tracking.js && node --check public/deepar.js && node --check public/deepar-test.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/ar.js && node --check public/tracking.js",
     "test": "node --test tests/*.test.cjs",
     "test:browser": "node tests/browser-tracking.cjs",
     "build:3d-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Mirrorly3DAssets.ps1"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
-    "deepar": "^5.6.22",
     "three": "^0.185.1"
   },
   "devDependencies": {

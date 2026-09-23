@@ -5,13 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#16121f" />
     <title>Mirrorly - 3D Salon Hairstyle Preview</title>
-    <script>
-      if (window.location.hostname === "127.0.0.1") {
-        const licensedUrl = new URL(window.location.href);
-        licensedUrl.hostname = "localhost";
-        window.location.replace(licensedUrl.href);
-      }
-    </script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -35,7 +28,6 @@
         </div>
         <canvas id="previewCanvas" width="960" height="720"></canvas>
         <canvas id="arCanvas" width="960" height="720" hidden aria-label="Live augmented-reality hairstyle layer"></canvas>
-        <div id="deeparRoot" class="deepar-root" hidden aria-label="DeepAR live hairstyle AR"></div>
         <video id="cameraVideo" playsinline muted hidden></video>
         <div id="emptyState" class="empty-state">
           <div class="face-placeholder" aria-hidden="true"></div>
@@ -89,7 +81,6 @@
         </section>
 
         <p class="disclaimer">This preview is a visual simulation. Actual cut and color results will vary.</p>
-        <p class="provider-test"><a href="/deepar-test.html">Open DeepAR sample lab</a></p>
       </aside>
     </main>
 
@@ -103,7 +94,6 @@
       }
     </script>
     <script src="ar.js"></script>
-    <script src="deepar.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
