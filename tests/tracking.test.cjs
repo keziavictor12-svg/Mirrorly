@@ -184,17 +184,17 @@ test('measured temple depths curve the AI strip while preserving capture pixels'
   }
 });
 
-test('realism-first AI attachment keeps only subtle photographic curvature', () => {
+test('AI attachment uses gentle scalp curvature without rigid warping', () => {
   const attachment = {
     crop: { x: 500, y: 130, width: 200, height: 420 },
-    headX: 600, headY: 350, faceWidth: 200, depth: 80, depthStrength: 0.12,
+    headX: 600, headY: 350, faceWidth: 200, depth: 80, depthStrength: 0.20,
     quaternion: [0, 0, 0, 1],
     depthSamples: [{ x: 500, depth: 0 }, { x: 600, depth: 80 }, { x: 700, depth: 0 }]
   };
   const pose = { x: 600, y: 350, faceWidth: 200, quaternion: [0, 0, 0, 1] };
   const edge = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0, 0.3), pose);
   const crown = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0.5, 0.3), pose);
-  assert.ok(Math.abs(edge[2] - 70.4) < 1e-8);
+  assert.ok(Math.abs(edge[2] - 64) < 1e-8);
   assert.ok(Math.abs(crown[2] - 80) < 1e-8);
 });
 
@@ -214,13 +214,13 @@ test('single-view AI hair hides at large turns without hiding pure roll', () => 
   assert.equal(tracking.aiViewOpacity(pose(new THREE.Vector3(0, 0, 1), 0.9), attachment), 1);
 });
 
-test('realism-first AI hair fades outside a narrow front-facing range', () => {
-  const attachment = { quaternion: [0, 0, 0, 1], viewFadeStart: 10 * Math.PI / 180, viewFadeEnd: 15 * Math.PI / 180 };
+test('AI hair stays stable through small turns and fades before side distortion', () => {
+  const attachment = { quaternion: [0, 0, 0, 1], viewFadeStart: 14 * Math.PI / 180, viewFadeEnd: 22 * Math.PI / 180 };
   const pose = (degrees) => ({ quaternion: new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0), degrees * Math.PI / 180).toArray() });
-  assert.equal(tracking.aiViewOpacity(pose(8), attachment), 1);
-  assert.ok(tracking.aiViewOpacity(pose(12), attachment) > 0 && tracking.aiViewOpacity(pose(12), attachment) < 1);
-  assert.equal(tracking.aiViewOpacity(pose(16), attachment), 0);
+  assert.equal(tracking.aiViewOpacity(pose(12), attachment), 1);
+  assert.ok(tracking.aiViewOpacity(pose(18), attachment) > 0 && tracking.aiViewOpacity(pose(18), attachment) < 1);
+  assert.equal(tracking.aiViewOpacity(pose(23), attachment), 0);
 });
 
 test('AI matte fills small crown gaps without filling the face or outer silhouette', () => {
@@ -256,13 +256,13 @@ test('frozen background repairs fade on tilt, translation and scale without hidi
 test('realism-first frozen repair disappears before the photographic hair layer', () => {
   const attachment = {
     headX: 600, headY: 350, faceWidth: 200, quaternion: [0, 0, 0, 1],
-    viewFadeStart: 10 * Math.PI / 180, viewFadeEnd: 15 * Math.PI / 180,
-    repairTravelStart: 0.008, repairTravelEnd: 0.045,
-    repairZoomStart: 0.012, repairZoomEnd: 0.055,
-    repairAngleStart: 0.018, repairAngleEnd: 0.075
+    viewFadeStart: 14 * Math.PI / 180, viewFadeEnd: 22 * Math.PI / 180,
+    repairTravelStart: 0.015, repairTravelEnd: 0.08,
+    repairZoomStart: 0.018, repairZoomEnd: 0.08,
+    repairAngleStart: 0.03, repairAngleEnd: 0.14
   };
   const turned = { x: 600, y: 350, faceWidth: 200, quaternion: new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0), 0.08).toArray() };
+    new THREE.Vector3(0, 1, 0), 0.15).toArray() };
   assert.equal(tracking.backgroundRepairOpacity(turned, attachment), 0);
   assert.equal(tracking.aiViewOpacity(turned, attachment), 1);
 });
@@ -276,6 +276,17 @@ test('head-connected hair keeps long tails and excludes unrelated background hai
   assert.equal(selected.data[25 * 30 + 3], 0, 'background component was retained');
 });
 
+test('head selection retains connected low-confidence edge wisps', () => {
+  const mask = { width: 18, height: 18, data: new Float32Array(18 * 18) };
+  for (let y = 4; y < 14; y++) for (let x = 7; x < 11; x++) mask.data[y * 18 + x] = 0.9;
+  mask.data[6 * 18 + 6] = 0.06;
+  mask.data[5 * 18 + 6] = 0.06;
+  mask.data[5 * 18 + 5] = 0.06;
+  mask.data[14 * 18 + 16] = 0.06;
+  const selected = tracking.selectHeadHair(mask, { left: 6, right: 12, top: 3, bottom: 9 });
+  assert.ok(selected.data[5 * 18 + 5] > 0.05, 'connected edge wisp was discarded');
+  assert.equal(selected.data[14 * 18 + 16], 0, 'isolated low-confidence noise was retained');
+});
 test('cropped edge feather is zero at the border and preserves unclipped interior/tips', () => {
   const edges = { bottom: true };
   assert.equal(tracking.captureEdgeAlpha(50, 99, 100, 100, edges, 20), 0);

@@ -393,7 +393,7 @@
       mesh.geometry.dispose();
       // A subdivided, landmark-depth strip curves around the forehead/temples.
       // It remains single-view 2.5D, not a generated volumetric hairstyle model.
-      mesh.geometry = style.aiAttachment ? new THREE.PlaneGeometry(1, 1, 32, 1) : new THREE.PlaneGeometry(1, 1);
+      mesh.geometry = style.aiAttachment ? new THREE.PlaneGeometry(1, 1, 48, 8) : new THREE.PlaneGeometry(1, 1);
       if (style.aiAttachment) {
         const positions = mesh.geometry.attributes.position;
         const uv = mesh.geometry.attributes.uv;

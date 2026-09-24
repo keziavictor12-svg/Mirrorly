@@ -734,6 +734,25 @@ function createHairConfidenceCanvas(hairMask, width, height) {
   return scaledMask;
 }
 
+function createExpandedHairConfidenceCanvas(hairMask, width, height, radius) {
+  const source = createHairConfidenceCanvas(hairMask, width, height);
+  if (!source || radius < 1) return source;
+  const expanded = document.createElement('canvas');
+  expanded.width = width;
+  expanded.height = height;
+  const expandedContext = expanded.getContext('2d');
+  const distance = Math.max(1, Math.round(radius));
+  const diagonal = Math.max(1, Math.round(distance * 0.72));
+  expandedContext.filter = 'blur(' + Math.max(0.75, distance * 0.28) + 'px)';
+  for (const [x, y] of [[0, 0], [-distance, 0], [distance, 0], [0, -distance], [0, distance],
+    [-diagonal, -diagonal], [diagonal, -diagonal], [-diagonal, diagonal], [diagonal, diagonal]]) {
+    expandedContext.drawImage(source, x, y);
+  }
+  expandedContext.filter = 'none';
+  expandedContext.drawImage(source, 0, 0);
+  return expanded;
+}
+
 function drawLiveAiStyleMask(maskContext, capture, width, height) {
   const style = capture.style || state.style;
   const scaleX = width / capture.width;
@@ -775,12 +794,18 @@ function createLiveAiEditMask(capture) {
   editMaskContext.fillRect(0, 0, editMask.width, editMask.height);
   editMaskContext.globalCompositeOperation = 'destination-out';
   drawLiveAiStyleMask(editMaskContext, capture, editMask.width, editMask.height);
-  const originalHair = createHairConfidenceCanvas(capture.originalHairMask, capture.width, capture.height);
+  const selectedOriginalHair = selectCapturedHeadHair(capture.originalHairMask, capture);
+  const expansionRadius = clampNumber(capture.pose.faceWidth * 0.025, 3, 14);
+  const originalHair = createExpandedHairConfidenceCanvas(
+    selectedOriginalHair,
+    capture.width,
+    capture.height,
+    expansionRadius
+  );
   if (originalHair) {
-    // Let the edit remove the old crown/bun as well as add the new hairstyle.
-    editMaskContext.filter = 'blur(2px)';
+    // Expand beyond the segmenter's soft boundary so old lengths, flyaways and
+    // dark halos are editable when changing from long hair to a shorter cut.
     editMaskContext.drawImage(originalHair, 0, 0);
-    editMaskContext.filter = 'none';
   }
   editMaskContext.globalCompositeOperation = 'source-over';
   return editMask;
@@ -791,10 +816,10 @@ function selectCapturedHeadHair(mask, capture) {
   const sx = mask.width / capture.width, sy = mask.height / capture.height;
   const pose = capture.pose;
   return window.MirrorlyTracking.selectHeadHair(mask, {
-    left: (pose.foreheadX - pose.faceWidth * 0.8) * sx,
-    right: (pose.foreheadX + pose.faceWidth * 0.8) * sx,
-    top: (pose.foreheadY - pose.faceHeight * 0.65) * sy,
-    bottom: (pose.faceCenterY + pose.faceHeight * 0.15) * sy
+    left: (pose.foreheadX - pose.faceWidth * 0.9) * sx,
+    right: (pose.foreheadX + pose.faceWidth * 0.9) * sx,
+    top: (pose.foreheadY - pose.faceHeight * 0.72) * sy,
+    bottom: (pose.faceCenterY + pose.faceHeight * 0.22) * sy
   });
 }
 
@@ -851,7 +876,12 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   const semanticPixels = semanticCanvas
     ? semanticCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height)
     : null;
-  const originalHairCanvas = createHairConfidenceCanvas(selectCapturedHeadHair(capture.originalHairMask, capture), width, height);
+  const originalHairCanvas = createExpandedHairConfidenceCanvas(
+    selectCapturedHeadHair(capture.originalHairMask, capture),
+    width,
+    height,
+    clampNumber(capture.pose.faceWidth * width / capture.width * 0.015, 2, 10)
+  );
   const originalHairPixels = originalHairCanvas
     ? originalHairCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height)
     : null;
@@ -922,7 +952,7 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
 
       const expandedAlpha = smoothStep(0.02, 0.48, guideAlpha);
       const differenceAlpha = smoothStep(2, semanticPixels ? 17 : 22, difference);
-      const semanticAlpha = semanticPixels ? smoothStep(0.06, 0.66, hairConfidence) : 1;
+      const semanticAlpha = semanticPixels ? smoothStep(0.035, 0.52, hairConfidence) : 1;
       // A semantic hair mask defines the actual AI silhouette; a fixed SVG
       // opening/difference mask must not cut holes in otherwise unchanged hair.
       const hairAlpha = semanticPixels ? semanticAlpha : Math.max(coreAlpha, expandedAlpha) * differenceAlpha;
@@ -1044,12 +1074,12 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       // Realism-first: keep the generated photograph nearly planar and only
       // show it near the captured front view. Frozen room repair disappears
       // even sooner so it cannot become a moving dark polygon.
-      depthStrength: 0.12,
-      viewFadeStart: 10 * Math.PI / 180,
-      viewFadeEnd: 15 * Math.PI / 180,
-      repairTravelStart: 0.008, repairTravelEnd: 0.045,
-      repairZoomStart: 0.012, repairZoomEnd: 0.055,
-      repairAngleStart: 0.018, repairAngleEnd: 0.075
+      depthStrength: 0.20,
+      viewFadeStart: 14 * Math.PI / 180,
+      viewFadeEnd: 22 * Math.PI / 180,
+      repairTravelStart: 0.015, repairTravelEnd: 0.08,
+      repairZoomStart: 0.018, repairZoomEnd: 0.08,
+      repairAngleStart: 0.03, repairAngleEnd: 0.14
     },
     faceOpeningRatio: clampNumber(faceWidth / cropWidth, 0.12, 1.2),
     faceOpeningHeightRatio: clampNumber(faceHeight / cropHeight, 0.12, 1.2),
@@ -1119,7 +1149,7 @@ async function createLiveAiHair() {
   }
   const capturePose = window.MirrorlyAR.getCapturePose();
   if (!capturePose) return;
-  if (Math.abs(capturePose.yaw) > 0.35 || Math.abs(capturePose.pitch) > 0.25 || Math.abs(capturePose.roll) > 0.2) {
+  if (Math.abs(capturePose.yaw) > 0.22 || Math.abs(capturePose.pitch) > 0.18 || Math.abs(capturePose.roll) > 0.14) {
     showToast('Face forward to generate aligned AI hair');
     return;
   }
@@ -2189,26 +2219,30 @@ function drawLiveHairlineBlend(pose) {
 
   const faceWidth = pose.faceWidth;
   const faceHeight = Math.max(1, pose.faceHeight);
+  const color = state.color?.value || '#241817';
+  const red = Math.round(parseInt(color.slice(1, 3), 16) * 0.38);
+  const green = Math.round(parseInt(color.slice(3, 5), 16) * 0.38);
+  const blue = Math.round(parseInt(color.slice(5, 7), 16) * 0.38);
   context.save();
-  context.translate(pose.foreheadX ?? pose.faceCenterX, pose.foreheadY + faceHeight * 0.025);
+  context.translate(pose.foreheadX ?? pose.faceCenterX, pose.foreheadY + faceHeight * 0.018);
   context.rotate(pose.roll || 0);
-  context.filter = 'blur(' + Math.max(2, faceWidth * 0.018) + 'px)';
+  context.filter = 'blur(' + Math.max(1.5, faceWidth * 0.012) + 'px)';
   context.lineCap = 'round';
-  context.lineWidth = Math.max(4, faceWidth * 0.052);
-  const contactShade = context.createLinearGradient(0, -faceHeight * 0.06, 0, faceHeight * 0.12);
-  contactShade.addColorStop(0, 'rgba(28, 16, 15, 0)');
-  contactShade.addColorStop(0.48, 'rgba(28, 16, 15, .30)');
-  contactShade.addColorStop(1, 'rgba(28, 16, 15, 0)');
+  context.lineWidth = Math.max(3, faceWidth * 0.036);
+  const contactShade = context.createLinearGradient(0, -faceHeight * 0.045, 0, faceHeight * 0.09);
+  contactShade.addColorStop(0, 'rgba(' + red + ',' + green + ',' + blue + ',0)');
+  contactShade.addColorStop(0.52, 'rgba(' + red + ',' + green + ',' + blue + ',.18)');
+  contactShade.addColorStop(1, 'rgba(' + red + ',' + green + ',' + blue + ',0)');
   context.strokeStyle = contactShade;
   context.beginPath();
   context.ellipse(
     0,
     0,
-    faceWidth * 0.43,
-    faceHeight * 0.105,
+    faceWidth * 0.405,
+    faceHeight * 0.078,
     0,
-    Math.PI * 1.04,
-    Math.PI * 1.96
+    Math.PI * 1.05,
+    Math.PI * 1.95
   );
   context.stroke();
   context.restore();
@@ -2221,7 +2255,7 @@ function compositeLiveAr(now) {
   const generatedHairIsActive = Boolean(
     state.liveAiHair && state.liveAiHairKey === currentLookKey()
   );
-  if (!generatedHairIsActive) drawLiveHairlineBlend(arStatus.pose);
+  if (generatedHairIsActive) drawLiveHairlineBlend(arStatus.pose);
   context.save();
   context.imageSmoothingEnabled = true;
   context.globalAlpha = 1;

@@ -185,19 +185,28 @@
   class PoseFilter {
     constructor() { this.reset(); }
     reset() {
-      this.x = new OneEuroFilter(2.5, 0.14); this.y = new OneEuroFilter(2.5, 0.14);
-      this.scale = new OneEuroFilter(1.8, 2.5);
+      this.x = new OneEuroFilter(1.7, 0.2); this.y = new OneEuroFilter(1.7, 0.2);
+      this.scale = new OneEuroFilter(1.35, 2.8);
+      this.faceCenterX = new OneEuroFilter(1.7, 0.2); this.faceCenterY = new OneEuroFilter(1.7, 0.2);
+      this.foreheadX = new OneEuroFilter(1.7, 0.2); this.foreheadY = new OneEuroFilter(1.7, 0.2);
       this.quaternion = null; this.rawQuaternion = null; this.time = null;
     }
     filter(pose, now) {
       const dt = this.time === null ? 0 : clamp((now - this.time) / 1000, 0, 0.25);
-      const next = { ...pose, x: this.x.filter(pose.x, now), y: this.y.filter(pose.y, now) };
+      const next = {
+        ...pose,
+        x: this.x.filter(pose.x, now), y: this.y.filter(pose.y, now),
+        faceCenterX: this.faceCenterX.filter(pose.faceCenterX, now),
+        faceCenterY: this.faceCenterY.filter(pose.faceCenterY, now),
+        foreheadX: this.foreheadX.filter(pose.foreheadX, now),
+        foreheadY: this.foreheadY.filter(pose.foreheadY, now)
+      };
       const ratio = Math.exp(this.scale.filter(Math.log(pose.faceWidth), now)) / pose.faceWidth;
       next.faceWidth *= ratio; next.faceHeight *= ratio;
       next.quaternion = pose.quaternion.slice();
       if (this.quaternion) {
         const travel = 2 * Math.acos(clamp(Math.abs(dot(this.rawQuaternion, pose.quaternion)), -1, 1));
-        next.quaternion = slerp(this.quaternion, pose.quaternion, alpha(4 + 4 * travel / Math.max(dt, 0.001), dt));
+        next.quaternion = slerp(this.quaternion, pose.quaternion, alpha(2.8 + 5 * travel / Math.max(dt, 0.001), dt));
       }
       this.quaternion = next.quaternion; this.rawQuaternion = pose.quaternion.slice(); this.time = now;
       return next;
@@ -309,14 +318,14 @@
     const data = new Float32Array(width * height);
     const visited = new Uint8Array(data.length), queue = new Uint32Array(data.length);
     for (let start = 0; start < data.length; start += 1) {
-      if (visited[start] || mask.data[start] < 0.08) continue;
+      if (visited[start] || mask.data[start] < 0.05) continue;
       let read = 0, count = 1, touchesHead = false;
       visited[start] = 1; queue[0] = start;
       while (read < count) {
         const index = queue[read++], x = index % width, y = Math.floor(index / width);
         if (x >= seed.left && x <= seed.right && y >= seed.top && y <= seed.bottom) touchesHead = true;
         for (const next of [x > 0 ? index - 1 : -1, x < width - 1 ? index + 1 : -1, y > 0 ? index - width : -1, y < height - 1 ? index + width : -1]) {
-          if (next < 0 || visited[next] || mask.data[next] < 0.08) continue;
+          if (next < 0 || visited[next] || mask.data[next] < 0.05) continue;
           visited[next] = 1; queue[count++] = next;
         }
       }
