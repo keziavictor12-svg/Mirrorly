@@ -584,7 +584,7 @@ function syncArHair() {
       arStyle,
       state.color,
       useGeneratedHair ? state.liveAiHair.foregroundSource : null,
-      useGeneratedHair ? state.liveAiHair.repairSource : null
+      null
     );
   }
   updateLiveAiHairButton();
@@ -863,7 +863,6 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   originalContext.drawImage(capture.portrait, 0, 0, width, height);
   const aiPixels = aiContext.getImageData(0, 0, width, height);
   const originalPixels = originalContext.getImageData(0, 0, width, height);
-  const repairPixels = aiContext.createImageData(width, height);
   const hairOnlyPixels = aiContext.createImageData(width, height);
   hairMask = selectCapturedHeadHair(hairMask, capture);
   if (hairMask) {
@@ -885,6 +884,12 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   const originalHairPixels = originalHairCanvas
     ? originalHairCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height)
     : null;
+  const faceContourCanvas = document.createElement('canvas');
+  faceContourCanvas.width = width;
+  faceContourCanvas.height = height;
+  const faceContourContext = faceContourCanvas.getContext('2d', { willReadFrequently: true });
+  faceContourContext.drawImage(capture.faceMask, 0, 0, width, height);
+  const faceContourPixels = faceContourContext.getImageData(0, 0, width, height);
 
   const scaleX = width / capture.width;
   const scaleY = height / capture.height;
@@ -936,8 +941,7 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       const guideAlpha = guidePixels.data[pixel + 3] / 255;
       if (!semanticPixels && guideAlpha < 0.015) continue;
       const hairConfidence = semanticPixels ? semanticPixels.data[pixel + 3] / 255 : 1;
-      const oldHairConfidence = originalHairPixels ? originalHairPixels.data[pixel + 3] / 255 : 0;
-      if (semanticPixels && hairConfidence < 0.035 && oldHairConfidence < 0.1) continue;
+      if (semanticPixels && hairConfidence < 0.035) continue;
       const redDifference = Math.abs(aiPixels.data[pixel] - originalPixels.data[pixel]);
       const greenDifference = Math.abs(aiPixels.data[pixel + 1] - originalPixels.data[pixel + 1]);
       const blueDifference = Math.abs(aiPixels.data[pixel + 2] - originalPixels.data[pixel + 2]);
@@ -953,23 +957,21 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       const expandedAlpha = smoothStep(0.02, 0.48, guideAlpha);
       const differenceAlpha = smoothStep(2, semanticPixels ? 17 : 22, difference);
       const semanticAlpha = semanticPixels ? smoothStep(0.035, 0.52, hairConfidence) : 1;
-      // A semantic hair mask defines the actual AI silhouette; a fixed SVG
-      // opening/difference mask must not cut holes in otherwise unchanged hair.
-      const hairAlpha = semanticPixels ? semanticAlpha : Math.max(coreAlpha, expandedAlpha) * differenceAlpha;
-      const repairAlpha = semanticPixels
-        ? smoothStep(0.12, 0.8, oldHairConfidence) * (1 - semanticAlpha) * differenceAlpha : 0;
-      const silhouetteAlpha = Math.max(hairAlpha, repairAlpha);
-      const alpha = Math.round(
-        255 * regionAlpha * silhouetteAlpha
-      );
+      const faceContourAlpha = faceContourPixels.data[pixel + 3] / 255;
+      // Hair Segmenter can occasionally label skin as hair. Within the measured
+      // face contour, keep only pixels that materially changed from face to hair.
+      const faceHairEvidence = smoothStep(14, 46, difference);
+      const faceProtection = 1 - faceContourAlpha * (1 - faceHairEvidence);
+      // The displayed texture is strictly hair-only. No frozen face, neck, room,
+      // chair, curtain or other generated portrait pixels may enter this layer.
+      const hairAlpha = semanticPixels
+        ? semanticAlpha * faceProtection
+        : Math.max(coreAlpha, expandedAlpha) * differenceAlpha * faceProtection;
+      const alpha = Math.round(255 * regionAlpha * hairAlpha);
       if (alpha < 5) continue;
 
-      repairPixels.data[pixel] = clampNumber(aiPixels.data[pixel] + colorCorrection[0], 0, 255);
-      repairPixels.data[pixel + 1] = clampNumber(aiPixels.data[pixel + 1] + colorCorrection[1], 0, 255);
-      repairPixels.data[pixel + 2] = clampNumber(aiPixels.data[pixel + 2] + colorCorrection[2], 0, 255);
-      repairPixels.data[pixel + 3] = Math.round(255 * regionAlpha * repairAlpha);
-      // Foreground pixels contain ONLY AI hair, not the old-hair repair patch.
-      // Do not multiply the semantic confidence twice, creating hairline holes.
+      // Foreground pixels contain ONLY AI hair. Do not multiply the semantic
+      // confidence twice, which would create holes around fine strands.
       hairOnlyPixels.data[pixel] = clampNumber(aiPixels.data[pixel] + colorCorrection[0], 0, 255);
       hairOnlyPixels.data[pixel + 1] = clampNumber(aiPixels.data[pixel + 1] + colorCorrection[1], 0, 255);
       hairOnlyPixels.data[pixel + 2] = clampNumber(aiPixels.data[pixel + 2] + colorCorrection[2], 0, 255);
@@ -997,7 +999,6 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
     for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
       const pixel = (y * width + x) * 4 + 3;
       const alpha = window.MirrorlyTracking.captureEdgeAlpha(x, y, width, height, clipped, feather);
-      repairPixels.data[pixel] = Math.round(repairPixels.data[pixel] * alpha);
       hairOnlyPixels.data[pixel] = Math.round(hairOnlyPixels.data[pixel] * alpha);
     }
   }
@@ -1006,10 +1007,6 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   rawPatch.width = width;
   rawPatch.height = height;
   rawPatch.getContext('2d').putImageData(hairOnlyPixels, 0, 0);
-  const repairPatch = document.createElement('canvas');
-  repairPatch.width = width; repairPatch.height = height;
-  repairPatch.getContext('2d').putImageData(repairPixels, 0, 0);
-
   const foregroundPatch = document.createElement('canvas');
   foregroundPatch.width = width;
   foregroundPatch.height = height;
@@ -1058,9 +1055,6 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   );
 
   const cropCenterX = minX + cropWidth / 2;
-  const repairCropped = document.createElement('canvas');
-  repairCropped.width = cropWidth; repairCropped.height = cropHeight;
-  repairCropped.getContext('2d').drawImage(repairPatch, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
   const cropCenterY = minY + cropHeight / 2;
   const profile = {
     ...(capture.style || state.style),
@@ -1069,17 +1063,15 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
     aiAttachment: {
       crop: { x: minX / scaleX, y: minY / scaleY, width: cropWidth / scaleX, height: cropHeight / scaleY },
       headX: capture.pose.headX, headY: capture.pose.headY,
-      faceWidth: capture.pose.faceWidth, quaternion: capture.pose.quaternion.slice(),
+      faceWidth: capture.pose.faceWidth,
+      foreheadX: capture.pose.foreheadX, foreheadY: capture.pose.foreheadY,
+      quaternion: capture.pose.quaternion.slice(),
       depth: capture.pose.foreheadDepth, depthSamples: capture.pose.depthSamples,
-      // Realism-first: keep the generated photograph nearly planar and only
-      // show it near the captured front view. Frozen room repair disappears
-      // even sooner so it cannot become a moving dark polygon.
-      depthStrength: 0.20,
-      viewFadeStart: 14 * Math.PI / 180,
-      viewFadeEnd: 22 * Math.PI / 180,
-      repairTravelStart: 0.015, repairTravelEnd: 0.08,
-      repairZoomStart: 0.018, repairZoomEnd: 0.08,
-      repairAngleStart: 0.03, repairAngleEnd: 0.14
+      // Realism-first: keep the hair photograph gently curved while hiding it
+      // before a front-only texture would reveal a distorted side or rear view.
+      depthStrength: 0.32,
+      viewFadeStart: 30 * Math.PI / 180,
+      viewFadeEnd: 45 * Math.PI / 180
     },
     faceOpeningRatio: clampNumber(faceWidth / cropWidth, 0.12, 1.2),
     faceOpeningHeightRatio: clampNumber(faceHeight / cropHeight, 0.12, 1.2),
@@ -1089,7 +1081,7 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   return {
     source: cropped,
     foregroundSource: foregroundCropped,
-    repairSource: semanticPixels && originalHairPixels ? repairCropped : null,
+    repairSource: null,
     profile,
     semanticMask: Boolean(semanticPixels),
     edgeClipped
@@ -1181,7 +1173,7 @@ async function createLiveAiHair() {
     try {
       capture.originalHairMask = await window.MirrorlyAR.segmentHair(portrait);
     } catch (error) {
-      console.warn('Original hair segmentation unavailable; no background-repair patch', error);
+      console.warn('Original hair segmentation unavailable; using the fitted edit region only', error);
     }
     if (!requestIsCurrent()) return;
     const editMask = createLiveAiEditMask(capture);
@@ -1781,7 +1773,7 @@ function renderSalonCapturePanel() {
       image.alt = `${view.label} capture`;
       item.append(image);
     }
-    item.append(document.createTextNode(capture ? `${view.label} ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“` : view.label));
+    item.append(document.createTextNode(capture ? `${view.label} \u2713` : view.label));
     return item;
   }));
   salonCaptureButton.hidden = complete || state.aiRendering;
@@ -1978,28 +1970,48 @@ async function createSalonResults() {
   salonCancelButton.disabled = true;
   privacyStatus.textContent = "Uploading three selected stills for salon hairstyle generation";
   try {
-    let consistencyReference = null;
-    for (let index = 0; index < state.salonCaptures.length; index += 1) {
-      if (state.style.id !== requestedStyleId || state.color.name !== requestedColorName) {
-        throw new Error("The selected style changed; start generation again");
-      }
-      state.salonCaptureIndex = index;
-      salonCaptureTitle.textContent = `Creating ${state.salonCaptures[index].label.toLowerCase()} result (${index + 1}/3)...`;
-      salonCaptureGuide.textContent = index === 0
-        ? "Creating the approved front hairstyle first."
-        : "Matching this angle to the approved front hairstyle.";
-      const result = await requestSalonResult(
-        state.salonCaptures[index],
+    const selectionStillMatches = () =>
+      state.style.id === requestedStyleId && state.color.name === requestedColorName;
+    if (!selectionStillMatches()) {
+      throw new Error("The selected style changed; start generation again");
+    }
+
+    state.salonCaptureIndex = 0;
+    salonCaptureTitle.textContent = "Creating realistic front result (1/3)...";
+    salonCaptureGuide.textContent = "Creating the approved front hairstyle first.";
+    privacyStatus.textContent = "Uploading the front still; side views will run together after it is approved";
+    const front = await requestSalonResult(
+      state.salonCaptures[0],
+      requestedStyleId,
+      requestedColorName,
+      styleReference,
+      null
+    );
+    if (!selectionStillMatches()) {
+      throw new Error("The selected style changed; start generation again");
+    }
+
+    state.salonResults = [front];
+    state.salonSelectedView = front.viewId;
+    renderSalonCapturePanel();
+    salonCaptureTitle.textContent = "Front ready - creating both side views (2/3 and 3/3)...";
+    salonCaptureGuide.textContent = "The approved front result is ready. Matching the left and right views at the same time.";
+    privacyStatus.textContent = "Front result ready; creating both matching side views together";
+
+    const sideResults = await Promise.all(
+      state.salonCaptures.slice(1).map((capture) => requestSalonResult(
+        capture,
         requestedStyleId,
         requestedColorName,
         styleReference,
-        consistencyReference
-      );
-      state.salonResults.push(result);
-      consistencyReference ||= result.dataUrl;
-      renderSalonCapturePanel();
+        front.dataUrl
+      ))
+    );
+    if (!selectionStillMatches()) {
+      throw new Error("The selected style changed; start generation again");
     }
-    const front = state.salonResults[0];
+    state.salonResults = [front, ...sideResults];
+    renderSalonCapturePanel();
     state.salonSelectedView = front.viewId;
     state.captured = true;
     state.capturedFrame = state.salonCaptures[0].frame;

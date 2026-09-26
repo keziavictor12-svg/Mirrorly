@@ -187,14 +187,14 @@ test('measured temple depths curve the AI strip while preserving capture pixels'
 test('AI attachment uses gentle scalp curvature without rigid warping', () => {
   const attachment = {
     crop: { x: 500, y: 130, width: 200, height: 420 },
-    headX: 600, headY: 350, faceWidth: 200, depth: 80, depthStrength: 0.20,
+    headX: 600, headY: 350, faceWidth: 200, depth: 80, depthStrength: 0.32,
     quaternion: [0, 0, 0, 1],
     depthSamples: [{ x: 500, depth: 0 }, { x: 600, depth: 80 }, { x: 700, depth: 0 }]
   };
   const pose = { x: 600, y: 350, faceWidth: 200, quaternion: [0, 0, 0, 1] };
   const edge = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0, 0.3), pose);
   const crown = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, 0.5, 0.3), pose);
-  assert.ok(Math.abs(edge[2] - 64) < 1e-8);
+  assert.ok(Math.abs(edge[2] - 54.4) < 1e-8);
   assert.ok(Math.abs(crown[2] - 80) < 1e-8);
 });
 
@@ -215,12 +215,12 @@ test('single-view AI hair hides at large turns without hiding pure roll', () => 
 });
 
 test('AI hair stays stable through small turns and fades before side distortion', () => {
-  const attachment = { quaternion: [0, 0, 0, 1], viewFadeStart: 14 * Math.PI / 180, viewFadeEnd: 22 * Math.PI / 180 };
+  const attachment = { quaternion: [0, 0, 0, 1], viewFadeStart: 30 * Math.PI / 180, viewFadeEnd: 45 * Math.PI / 180 };
   const pose = (degrees) => ({ quaternion: new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0), degrees * Math.PI / 180).toArray() });
-  assert.equal(tracking.aiViewOpacity(pose(12), attachment), 1);
-  assert.ok(tracking.aiViewOpacity(pose(18), attachment) > 0 && tracking.aiViewOpacity(pose(18), attachment) < 1);
-  assert.equal(tracking.aiViewOpacity(pose(23), attachment), 0);
+  assert.equal(tracking.aiViewOpacity(pose(25), attachment), 1);
+  assert.ok(tracking.aiViewOpacity(pose(37), attachment) > 0 && tracking.aiViewOpacity(pose(37), attachment) < 1);
+  assert.equal(tracking.aiViewOpacity(pose(46), attachment), 0);
 });
 
 test('AI matte fills small crown gaps without filling the face or outer silhouette', () => {

@@ -575,12 +575,26 @@
       } else if (attachment) {
         // Capture pixels already contain the original rotation. Undo it once,
         // then rotate around the tracked head origin, not the image crop center.
+        // Correct the projected layer against the currently measured forehead
+        // so canonical-fit residuals and filter lag do not leave the wig floating.
+        let anchorDx = 0;
+        let anchorDy = 0;
+        if (Number.isFinite(attachment.foreheadX) && Number.isFinite(attachment.foreheadY)
+          && Number.isFinite(filteredFacePose.foreheadX) && Number.isFinite(filteredFacePose.foreheadY)) {
+          const anchorU = (attachment.foreheadX - attachment.crop.x) / attachment.crop.width;
+          const anchorV = (attachment.foreheadY - attachment.crop.y) / attachment.crop.height;
+          const anchorPoint = tracking.capturePointToHead(attachment, anchorU, anchorV);
+          const projectedAnchor = tracking.projectHeadPoint(anchorPoint, filteredFacePose);
+          const limit = current.faceWidth * 0.09;
+          anchorDx = THREE.MathUtils.clamp(filteredFacePose.foreheadX - projectedAnchor[0], -limit, limit) * 0.88;
+          anchorDy = THREE.MathUtils.clamp(filteredFacePose.foreheadY - projectedAnchor[1], -limit, limit) * 0.88;
+        }
         for (const [mesh, foreground] of [[hairMesh, false], [hairFrontMesh, true]]) {
           const positions = mesh.geometry.attributes.position;
           const points = mesh.geometry.userData.headPoints;
           for (let i = 0; i < positions.count; i += 1) {
             const p = tracking.projectHeadPoint(points.slice(i * 3, i * 3 + 3), filteredFacePose);
-            positions.setXYZ(i, p[0], p[1], p[2] + (foreground ? current.faceWidth : 0));
+            positions.setXYZ(i, p[0] + anchorDx, p[1] + anchorDy, p[2] + (foreground ? current.faceWidth : 0));
           }
           positions.needsUpdate = true;
           mesh.position.set(0, 0, 0);

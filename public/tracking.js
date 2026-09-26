@@ -185,10 +185,10 @@
   class PoseFilter {
     constructor() { this.reset(); }
     reset() {
-      this.x = new OneEuroFilter(1.7, 0.2); this.y = new OneEuroFilter(1.7, 0.2);
-      this.scale = new OneEuroFilter(1.35, 2.8);
-      this.faceCenterX = new OneEuroFilter(1.7, 0.2); this.faceCenterY = new OneEuroFilter(1.7, 0.2);
-      this.foreheadX = new OneEuroFilter(1.7, 0.2); this.foreheadY = new OneEuroFilter(1.7, 0.2);
+      this.x = new OneEuroFilter(2.3, 0.28); this.y = new OneEuroFilter(2.3, 0.28);
+      this.scale = new OneEuroFilter(1.8, 3.2);
+      this.faceCenterX = new OneEuroFilter(2.3, 0.28); this.faceCenterY = new OneEuroFilter(2.3, 0.28);
+      this.foreheadX = new OneEuroFilter(2.3, 0.28); this.foreheadY = new OneEuroFilter(2.3, 0.28);
       this.quaternion = null; this.rawQuaternion = null; this.time = null;
     }
     filter(pose, now) {
@@ -206,7 +206,7 @@
       next.quaternion = pose.quaternion.slice();
       if (this.quaternion) {
         const travel = 2 * Math.acos(clamp(Math.abs(dot(this.rawQuaternion, pose.quaternion)), -1, 1));
-        next.quaternion = slerp(this.quaternion, pose.quaternion, alpha(2.8 + 5 * travel / Math.max(dt, 0.001), dt));
+        next.quaternion = slerp(this.quaternion, pose.quaternion, alpha(3.8 + 6 * travel / Math.max(dt, 0.001), dt));
       }
       this.quaternion = next.quaternion; this.rawQuaternion = pose.quaternion.slice(); this.time = now;
       return next;

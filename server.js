@@ -261,6 +261,7 @@ async function renderLiveAiHairLayer(request, response) {
       'Preserve the exact identity, face, expression, skin, pose, anatomy, body, clothes, room, camera angle, crop, and image dimensions from the first portrait.',
       'Merge natural roots and individual strands into the scalp and temples. Remove every pixel of old hair that is outside or conflicts with the selected cut, including long lengths, buns, flyaways, and dark edge halos.',
       'Where a shorter cut exposes areas previously covered by old hair, reconstruct the original wall, curtain, chair, or room from nearby portrait pixels inside the editable region. Do not leave duplicate old hair behind the new style.',
+      'Keep every non-hair pixel, especially the face, neck, ears, clothing, and room, identical to the first image. Do not regenerate or retouch them.',
       'The hair must not look like CGI, a 3D render, a game asset, an illustration, a plastic surface, a mannequin, a helmet, or a pasted wig.',
       'Do not leave a face-shaped hole, hard oval edge, halo, floating layer, black geometry, repeated strand pattern, or perfect specular band.',
       'At normal viewing size and at 100 percent crop, the edited region should look like pixels from the same unedited webcam photograph.',

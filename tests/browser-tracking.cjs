@@ -265,21 +265,26 @@ async function main() {
         if (uploadSource.width !== 1920 || uploadSource.height !== 1080) throw new Error('Upload resize modified the displayed capture');
         if (referenceJpegBytes >= referencePngBytes) throw new Error('Optimized reference payload is not smaller');
       } finally { state.style = savedStyle; state.color = savedColor; }
+      const falseFaceX = Math.round(capturePose.faceCenterX);
+      const falseFaceY = Math.round(capturePose.faceCenterY);
+      maskRect(newMask, falseFaceX - 12, falseFaceY - 12, 25, 25);
       const merged = buildLiveAiMergedLayer(editedImage, fixtureCapture, newMask);
       const crop = merged.profile.aiAttachment.crop;
       const patchSample = (image, x, y) => [...image.getContext('2d').getImageData(x - crop.x, y - crop.y, 1, 1).data];
       if (patchSample(merged.source, 835, 215)[3] !== 0) throw new Error('Frozen background remains attached to scalp hair');
-      if (patchSample(merged.repairSource, 835, 215)[3] < 200) throw new Error('Separate original-hair repair was discarded');
-      if (patchSample(merged.source, 655, 285)[3] < 200) throw new Error('Unchanged semantic hair was incorrectly discarded');
+      if (merged.repairSource !== null) throw new Error('Live AI layer retained frozen portrait/background repair pixels');
       if (patchSample(merged.foregroundSource, 835, 215)[3] !== 0) throw new Error('Foreground mask retains old-hair/background pixels outside face');
-      if (patchSample(merged.foregroundSource, 655, 285)[3] < 200) throw new Error('Foreground strands were lost');
       if (patchSample(merged.foregroundSource, foreheadSample.x, foreheadSample.y)[3] < 230) throw new Error('Landmark forehead hair was clipped by the old oval');
+      if (patchSample(merged.source, falseFaceX, falseFaceY)[3] !== 0
+        || patchSample(merged.foregroundSource, falseFaceX, falseFaceY)[3] !== 0) {
+        throw new Error('Unchanged face pixels leaked into the transparent live hair texture');
+      }
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
       window.MirrorlyAR.setHair(merged.source, merged.profile, '#70432f', merged.foregroundSource, merged.repairSource);
       frame(0);
       if (sample(foreheadSample.x, foreheadSample.y)[3] < 200) throw new Error('Forehead strands were hidden by the live face depth mesh');
-      const repaired = sample(835, 215);
-      if (repaired[3] < 200 || Math.abs(repaired[0] - 120) > 2 || Math.abs(repaired[2] - 188) > 2) throw new Error('Capture-aligned background repair was darkened or lost');
+      const backgroundLeak = sample(835, 215);
+      if (backgroundLeak[3] > 5) throw new Error('Frozen background pixels leaked into the rendered hair layer');
       const checkNoRepairGhost = () => {
         const pixels = new Uint8Array(canvas.width * canvas.height * 4);
         markerGl.readPixels(0, 0, canvas.width, canvas.height, markerGl.RGBA, markerGl.UNSIGNED_BYTE, pixels);
@@ -356,6 +361,8 @@ async function main() {
       const savedMask = window.MirrorlyAR.createCaptureFaceMask;
       const savedStatus = window.MirrorlyAR.getStatus;
       const aiCalls = [];
+      let sideRequestsInFlight = 0;
+      let maximumSideRequestsInFlight = 0;
       const syntheticResult = createAiUploadDataUrl(edited, 'jpeg');
       try {
         window.fetch = async (url, options) => {
@@ -363,6 +370,12 @@ async function main() {
           const payload = JSON.parse(options.body); aiCalls.push({ url, payload });
           if (!payload.portrait.startsWith('data:image/png;') || !payload.arPreview.startsWith('data:image/jpeg;') || !payload.styleReference.startsWith('data:image/jpeg;')) throw new Error('Incorrect optimized upload formats');
           if (url === '/api/ai-render' && !payload.viewLabel && (!state.holdCapturedFrame || state.aiResult)) throw new Error('Optional photo did not hold the original capture');
+          if (payload.viewLabel === 'left' || payload.viewLabel === 'right') {
+            sideRequestsInFlight += 1;
+            maximumSideRequestsInFlight = Math.max(maximumSideRequestsInFlight, sideRequestsInFlight);
+            await new Promise(resolve => setTimeout(resolve, 15));
+            sideRequestsInFlight -= 1;
+          }
           return { ok: true, json: async () => ({ image: syntheticResult, timings: { apiMs: 13 } }) };
         };
         captureLivePortrait = () => portrait;
@@ -394,6 +407,7 @@ async function main() {
         if (state.salonResults.length !== 3 || state.aiResult !== state.salonResults[0]?.image) throw new Error('Guided salon generation did not retain all three results: results=' + state.salonResults.length + ', calls=' + aiCalls.length + ', guide=' + salonCaptureGuide.textContent + ', error=' + state.salonError);
         if (aiCalls.length !== 5 || aiCalls.slice(2).some(call => call.url !== '/api/ai-render')) throw new Error('Guided salon generation did not make exactly three explicit edits');
         if (aiCalls[2].payload.consistencyReference || !aiCalls[3].payload.consistencyReference || !aiCalls[4].payload.consistencyReference) throw new Error('Side views do not reuse the approved front hairstyle');
+        if (maximumSideRequestsInFlight !== 2) throw new Error('Side salon views were not generated concurrently after the front result');
         const metrics = window.MirrorlyAiDiagnostics.getMetrics();
         if (JSON.stringify(metrics).includes('data:image') || !Object.values(metrics).every(m => Object.values(m).every(n => Number.isFinite(n) && n >= 0))) throw new Error('AI diagnostics leaked pixels or invalid timing');
       } finally {
@@ -476,13 +490,13 @@ async function main() {
       state.aiAvailable = previousAiAvailable;
       updateLiveAiHairButton();
       return { passed: true, checks, glError, occluder: stale.metrics.occluder, modelFallback: true, layeredFallback: true, ghostPixels: 0,
-        aiTextureOrientation: true, originalHairRepair: true, foregroundMask: true, aiOnlyPreview: true,
+        aiTextureOrientation: true, transparentHairOnly: true, foregroundMask: true, aiOnlyPreview: true,
         foreheadContour: true, longHairExtent: true, croppedEdgeFade: true, repairMotionFade: true,
         liveCameraUnshaded: true, canonicalVertices: canonicalPoints.length, styleMasks,
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
         numericAiTimings: true, referencePngBytes, referenceJpegBytes,
         demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
-        guidedSalonCapture: true };
+        guidedSalonCapture: true, parallelSalonSides: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
