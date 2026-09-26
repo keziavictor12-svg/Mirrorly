@@ -481,6 +481,23 @@ async function main() {
         || typeof beginSalonCapture !== 'function' || typeof createSalonResults !== 'function') {
         throw new Error('Guided three-view salon workflow is unavailable');
       }
+      const savedSalonPrepare = window.MirrorlyAR.prepareHairSegmentation;
+      const salonLiveBefore = state.liveAr;
+      const salonAvailableBefore = state.aiAvailable;
+      window.MirrorlyAR.prepareHairSegmentation = async () => true;
+      state.liveAr = true;
+      state.aiAvailable = true;
+      state.salonCaptureActive = false;
+      salonCapturePanel.hidden = true;
+      await beginSalonCapture();
+      if (salonCapturePanel.hidden || !state.salonCaptureActive || state.salonCaptureIndex !== 0
+        || salonCaptureTitle.textContent !== 'Capture the front view') {
+        throw new Error('Create salon result did not open the guided capture panel');
+      }
+      cancelSalonCapture();
+      window.MirrorlyAR.prepareHairSegmentation = savedSalonPrepare;
+      state.liveAr = salonLiveBefore;
+      state.aiAvailable = salonAvailableBefore;
       const qualityHair = { data: new Float32Array(1000) };
       qualityHair.data.fill(1, 0, 100);
       const qualityFrame = { width: 1280, height: 720 };
@@ -507,7 +524,7 @@ async function main() {
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,
         numericAiTimings: true, referencePngBytes, referenceJpegBytes,
         demoCategories, cardBadgesRemoved: true, demoHeadFit: true, realCapturePreserved: true,
-        guidedSalonCapture: true, parallelSalonSides: true };
+        guidedSalonCapture: true, salonButtonOpens: true, parallelSalonSides: true };
     })()`
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);

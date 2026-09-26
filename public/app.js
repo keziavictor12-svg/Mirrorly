@@ -1867,25 +1867,48 @@ async function beginSalonCapture() {
     showToast("AI access is required to create the salon result");
     return;
   }
-  state.salonCaptureActive = true;
-  state.salonCaptureIndex = 0;
-  state.salonCaptures = [];
-  state.salonResults = [];
-  state.salonSideSign = 0;
-  state.salonError = "";
-  state.salonSelectedView = "front";
-  if (!state.liveAr) {
-    state.liveAr = true;
-    state.liveSessionVersion += 1;
-  }
-  await activateLocalLiveRenderer("Preparing local face and hair checks");
+
   salonCapturePanel.hidden = false;
+  salonCaptureTitle.textContent = "Preparing guided salon capture...";
+  salonCaptureGuide.textContent = "Starting local face and hair checks.";
   captureFaceButton.disabled = true;
   liveArButton.disabled = true;
   snapshotButton.disabled = true;
-  privacyStatus.textContent = "Capture quality checks stay on this laptop";
-  renderSalonCapturePanel();
-  showToast("Guided salon capture started");
+  privacyStatus.textContent = "Preparing local capture checks";
+
+  try {
+    if (!state.liveAr) {
+      const started = await startLiveAr({ automatic: true });
+      if (!started) throw new Error("Local face tracking could not start");
+    }
+    // Warm locally in the background. The panel must open immediately and
+    // captureSalonView will await the same cached model promise if necessary.
+    window.MirrorlyAR.prepareHairSegmentation?.().catch((error) => {
+      console.warn("Mirrorly salon hair-check warmup unavailable", error);
+    });
+    state.salonCaptureActive = true;
+    state.salonCaptureIndex = 0;
+    state.salonCaptures = [];
+    state.salonResults = [];
+    state.salonSideSign = 0;
+    state.salonError = "";
+    state.salonSelectedView = "front";
+    captureFaceButton.disabled = true;
+    liveArButton.disabled = true;
+    snapshotButton.disabled = true;
+    privacyStatus.textContent = "Capture quality checks stay on this laptop";
+    renderSalonCapturePanel();
+    showToast("Guided salon capture started");
+  } catch (error) {
+    console.error("Mirrorly salon capture failed to start", error);
+    state.salonCaptureActive = false;
+    salonCapturePanel.hidden = true;
+    captureFaceButton.disabled = false;
+    liveArButton.disabled = false;
+    snapshotButton.disabled = !state.liveAr;
+    privacyStatus.textContent = "Live AI tracking stays on this laptop";
+    showToast(error.message || "Guided salon capture could not start");
+  }
 }
 
 async function captureSalonView() {
