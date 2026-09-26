@@ -242,7 +242,9 @@ async function main() {
             const pixels = edit.getContext('2d').getImageData(0, 0, edit.width, edit.height).data;
             let changed = 0;
             for (let i = 3; i < pixels.length; i += 4) if (pixels[i] < 224) changed++;
+            const protectedFacePixel = (Math.round(capturePose.faceCenterY) * edit.width + Math.round(capturePose.faceCenterX)) * 4 + 3;
             if (changed < 500 || changed > 800000 || pixels[3] !== 255) throw new Error('Invalid edit mask for ' + style.id);
+            if (pixels[protectedFacePixel] !== 255) throw new Error('Central facial features remain editable for ' + style.id);
             const reference = new Image(); reference.src = createStyleReferenceDataUrl(); await reference.decode();
             if (!reference.src.startsWith('data:image/jpeg;') || Math.max(reference.naturalWidth, reference.naturalHeight) > 768) throw new Error('Reference upload was not bounded JPEG');
             styleMasks++;
@@ -268,7 +270,16 @@ async function main() {
       const falseFaceX = Math.round(capturePose.faceCenterX);
       const falseFaceY = Math.round(capturePose.faceCenterY);
       maskRect(newMask, falseFaceX - 12, falseFaceY - 12, 25, 25);
-      const merged = buildLiveAiMergedLayer(editedImage, fixtureCapture, newMask);
+      const faceLeakCanvas = document.createElement('canvas');
+      faceLeakCanvas.width = editedImage.naturalWidth; faceLeakCanvas.height = editedImage.naturalHeight;
+      const faceLeakContext = faceLeakCanvas.getContext('2d');
+      faceLeakContext.drawImage(editedImage, 0, 0);
+      faceLeakContext.fillStyle = '#ded7e8';
+      faceLeakContext.fillRect(falseFaceX - 12, falseFaceY - 12, 25, 25);
+      const faceLeakImage = new Image();
+      faceLeakImage.src = faceLeakCanvas.toDataURL('image/png');
+      await faceLeakImage.decode();
+      const merged = buildLiveAiMergedLayer(faceLeakImage, fixtureCapture, newMask);
       const crop = merged.profile.aiAttachment.crop;
       const patchSample = (image, x, y) => [...image.getContext('2d').getImageData(x - crop.x, y - crop.y, 1, 1).data];
       if (patchSample(merged.source, 835, 215)[3] !== 0) throw new Error('Frozen background remains attached to scalp hair');
@@ -277,7 +288,7 @@ async function main() {
       if (patchSample(merged.foregroundSource, foreheadSample.x, foreheadSample.y)[3] < 230) throw new Error('Landmark forehead hair was clipped by the old oval');
       if (patchSample(merged.source, falseFaceX, falseFaceY)[3] !== 0
         || patchSample(merged.foregroundSource, falseFaceX, falseFaceY)[3] !== 0) {
-        throw new Error('Unchanged face pixels leaked into the transparent live hair texture');
+        throw new Error('Altered face pixels leaked through the hairstyle face opening');
       }
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
       window.MirrorlyAR.setHair(merged.source, merged.profile, '#70432f', merged.foregroundSource, merged.repairSource);
@@ -490,7 +501,7 @@ async function main() {
       state.aiAvailable = previousAiAvailable;
       updateLiveAiHairButton();
       return { passed: true, checks, glError, occluder: stale.metrics.occluder, modelFallback: true, layeredFallback: true, ghostPixels: 0,
-        aiTextureOrientation: true, transparentHairOnly: true, foregroundMask: true, aiOnlyPreview: true,
+        aiTextureOrientation: true, transparentHairOnly: true, protectedFaceFeatures: true, foregroundMask: true, aiOnlyPreview: true,
         foreheadContour: true, longHairExtent: true, croppedEdgeFade: true, repairMotionFade: true,
         liveCameraUnshaded: true, canonicalVertices: canonicalPoints.length, styleMasks,
         segmenterWarmup: true, fullFrameUploads: true, liveAndPhotoActions: true,

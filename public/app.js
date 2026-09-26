@@ -785,6 +785,23 @@ function drawLiveAiStyleMask(maskContext, capture, width, height) {
   maskContext.restore();
 }
 
+function protectLiveAiFaceFeatures(maskContext, capture, width, height) {
+  const scaleX = width / capture.width;
+  const scaleY = height / capture.height;
+  const faceWidth = capture.pose.faceWidth * scaleX;
+  const faceHeight = capture.pose.faceHeight * scaleY;
+  // Keep the hairline and temple zones editable while making the eyes, nose,
+  // cheeks, and mouth opaque in the image-edit mask.
+  maskContext.save();
+  maskContext.translate(capture.pose.faceCenterX * scaleX, capture.pose.faceCenterY * scaleY);
+  maskContext.rotate(capture.pose.roll || 0);
+  maskContext.fillStyle = '#fff';
+  maskContext.beginPath();
+  maskContext.ellipse(0, faceHeight * 0.1, faceWidth * 0.36, faceHeight * 0.42, 0, 0, Math.PI * 2);
+  maskContext.fill();
+  maskContext.restore();
+}
+
 function createLiveAiEditMask(capture) {
   const editMask = document.createElement('canvas');
   editMask.width = capture.width;
@@ -808,6 +825,7 @@ function createLiveAiEditMask(capture) {
     editMaskContext.drawImage(originalHair, 0, 0);
   }
   editMaskContext.globalCompositeOperation = 'source-over';
+  protectLiveAiFaceFeatures(editMaskContext, capture, editMask.width, editMask.height);
   return editMask;
 }
 
@@ -897,6 +915,8 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   const faceHeight = capture.pose.faceHeight * scaleY;
   const faceCenterX = capture.pose.faceCenterX * scaleX;
   const faceCenterY = capture.pose.faceCenterY * scaleY;
+  const faceRollCos = Math.cos(capture.pose.roll || 0);
+  const faceRollSin = Math.sin(capture.pose.roll || 0);
   const colorCorrection = estimateAiColorCorrection(aiPixels, originalPixels, semanticPixels, originalHairPixels, {
     width, height, centerX: faceCenterX, centerY: faceCenterY,
     radiusX: faceWidth * 1.45, radiusY: faceHeight * 1.35
@@ -958,10 +978,24 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       const differenceAlpha = smoothStep(2, semanticPixels ? 17 : 22, difference);
       const semanticAlpha = semanticPixels ? smoothStep(0.035, 0.52, hairConfidence) : 1;
       const faceContourAlpha = faceContourPixels.data[pixel + 3] / 255;
-      // Hair Segmenter can occasionally label skin as hair. Within the measured
-      // face contour, keep only pixels that materially changed from face to hair.
-      const faceHairEvidence = smoothStep(14, 46, difference);
-      const faceProtection = 1 - faceContourAlpha * (1 - faceHairEvidence);
+      // Hair Segmenter can label altered or JPEG-shifted skin as hair. Inside
+      // the measured face contour, accept a pixel only when it both changed into
+      // hair and belongs to the selected hairstyle silhouette. The silhouette's
+      // face opening therefore stays transparent even after a severe model edit.
+      const faceHairEvidence = smoothStep(18, 56, difference);
+      const faceGuideEvidence = smoothStep(0.08, 0.44, Math.max(coreAlpha, guideAlpha));
+      const faceDx = x - faceCenterX;
+      const faceDy = y - faceCenterY;
+      const faceLocalX = faceDx * faceRollCos + faceDy * faceRollSin;
+      const faceLocalY = -faceDx * faceRollSin + faceDy * faceRollCos;
+      const featureX = 1 - smoothStep(0.62, 0.78, Math.abs(faceLocalX) / Math.max(1, faceWidth * 0.5));
+      const featureY = smoothStep(-0.42, -0.30, faceLocalY / Math.max(1, faceHeight))
+        * (1 - smoothStep(0.48, 0.60, faceLocalY / Math.max(1, faceHeight)));
+      const centralFeatureProtection = featureX * featureY;
+      const protectedCentralFace = 1 - faceContourAlpha * centralFeatureProtection;
+      const guidedFaceHair = 1 - faceContourAlpha * (1 - centralFeatureProtection)
+        * (1 - faceHairEvidence * faceGuideEvidence);
+      const faceProtection = protectedCentralFace * guidedFaceHair;
       // The displayed texture is strictly hair-only. No frozen face, neck, room,
       // chair, curtain or other generated portrait pixels may enter this layer.
       const hairAlpha = semanticPixels
