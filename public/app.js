@@ -579,12 +579,21 @@ function syncArHair() {
     ? state.liveAiHair.profile
     : (usesTrue3dLive(state.style) ? state.style : { ...state.style, model3d: null });
   if (hair) {
+    // Left/right salon views, when available, are blended by head angle.
+    const extraViews = useGeneratedHair
+      ? (state.liveAiHair.views || []).map((view) => ({
+        source: view.source,
+        foregroundSource: view.foregroundSource,
+        attachment: view.profile.aiAttachment
+      }))
+      : [];
     window.MirrorlyAR.setHair(
       hair,
       arStyle,
       state.color,
       useGeneratedHair ? state.liveAiHair.foregroundSource : null,
-      null
+      null,
+      extraViews
     );
   }
   updateLiveAiHairButton();
@@ -1101,6 +1110,12 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
       foreheadX: capture.pose.foreheadX, foreheadY: capture.pose.foreheadY,
       quaternion: capture.pose.quaternion.slice(),
       depth: capture.pose.foreheadDepth, depthSamples: capture.pose.depthSamples,
+      // The customer's own head-local landmarks: registration replaces the
+      // generic canonical-face forehead correction during live tracking.
+      personalAnchors: capture.pose.personalAnchors || null,
+      // Capture-time skin RGB; live exposure/white-balance changes are measured
+      // against it so the hair keeps matching the webcam image.
+      skinReference: measureCaptureSkinTone(capture.portrait, capture.pose),
       // Realism-first: keep the hair photograph gently curved while hiding it
       // before a front-only texture would reveal a distorted side or rear view.
       depthStrength: 0.32,
@@ -1308,6 +1323,7 @@ async function measureCapturedFace(capturedFrame) {
 function stopLiveAr(showMessage = true) {
   state.liveSessionVersion += 1;
   state.liveAr = false;
+  resetLiveHairRemoval();
   window.MirrorlyAR?.setEnabled(false);
   arCanvas.hidden = true;
   liveArButton.classList.remove("active");
@@ -1923,6 +1939,9 @@ async function captureSalonView() {
   salonCaptureGuide.textContent = "Checking face position and hair coverage locally...";
   try {
     const frame = captureLivePortrait();
+    // Freeze the contour with the frame so the generated view can later be
+    // reused as a live AR layer without any additional paid request.
+    const faceMask = window.MirrorlyAR.createCaptureFaceMask();
     const hairMask = await window.MirrorlyAR.segmentHair(frame);
     const quality = assessSalonCapture(frame, pose, hairMask, state.salonCaptureIndex);
     if (!quality.valid) {
@@ -1947,6 +1966,8 @@ async function captureSalonView() {
       label: definition.label,
       frame,
       pose: { ...pose },
+      faceMask,
+      originalHairMask: hairMask,
       detection,
       hairCoverage: quality.hairCoverage,
       thumbnail: frame.toDataURL("image/jpeg", 0.72)
@@ -2090,6 +2111,9 @@ async function createSalonResults() {
     salonCapturePrivacy.textContent = "The generated images are held in this browser session and can be saved individually.";
     renderSalonCapturePanel();
     showToast("Three realistic salon views are ready");
+    buildSalonLiveHair(requestedStyleId + ':' + requestedColorName).catch((error) => {
+      console.warn("Mirrorly could not reuse the salon views for live AR", error);
+    });
   } catch (error) {
     console.error("Mirrorly salon result generation failed", error);
     state.salonError = error.message || "Salon result generation failed";
@@ -2102,6 +2126,47 @@ async function createSalonResults() {
     salonGenerateButton.disabled = false;
     renderSalonCapturePanel();
   }
+}
+
+// Reuse the three generated salon views as view-dependent live AR layers: the
+// front view stays primary and the side views take over as the head turns.
+// Purely local post-processing of images already generated; no paid request.
+async function buildSalonLiveHair(lookKey) {
+  const layers = [];
+  for (let index = 0; index < state.salonResults.length; index += 1) {
+    const result = state.salonResults[index];
+    const capture = state.salonCaptures[index];
+    if (!result?.image || !capture?.faceMask) continue;
+    try {
+      let hairMask = null;
+      try {
+        hairMask = await window.MirrorlyAR.segmentHair(result.image);
+      } catch (error) {
+        console.warn("Salon view segmentation unavailable; using fitted fallback mask", error);
+      }
+      const layer = buildLiveAiMergedLayer(result.image, {
+        width: capture.frame.width,
+        height: capture.frame.height,
+        portrait: capture.frame,
+        style: state.style,
+        pose: capture.pose,
+        faceMask: capture.faceMask,
+        originalHairMask: capture.originalHairMask
+      }, hairMask);
+      layers.push({ viewId: capture.viewId, layer });
+    } catch (error) {
+      console.warn(`Salon ${capture.viewId} view could not become a live layer`, error);
+    }
+  }
+  const front = layers.find((entry) => entry.viewId === "front");
+  if (!front || currentLookKey() !== lookKey) return false;
+  state.liveAiHair = {
+    ...front.layer,
+    views: layers.filter((entry) => entry !== front).map((entry) => entry.layer)
+  };
+  state.liveAiHairKey = lookKey;
+  syncArHair();
+  return true;
 }
 
 function selectSalonResult(index) {
@@ -2317,6 +2382,190 @@ function drawLiveHairlineBlend(pose) {
   context.restore();
 }
 
+// Mean skin RGB from both cheeks and the nose, sampled in face-local
+// coordinates on a small frame. The per-channel median of the three patches
+// rejects one patch that falls on hair, shadow or background during a turn.
+function sampleSkinTone(pixels, width, height, scale, pose, hairMask = null) {
+  if (!pose || !(pose.faceWidth > 0) || !(pose.faceHeight > 0)) return null;
+  const faceWidth = pose.faceWidth * scale;
+  const faceHeight = pose.faceHeight * scale;
+  const cos = Math.cos(pose.roll || 0);
+  const sin = Math.sin(pose.roll || 0);
+  const radius = Math.max(1, Math.round(faceWidth * 0.045));
+  const patches = [[-0.21, 0.1], [0.21, 0.1], [0, 0.06]].map(([u, v]) => {
+    const localX = u * faceWidth;
+    const localY = v * faceHeight;
+    const centerX = Math.round(pose.faceCenterX * scale + localX * cos - localY * sin);
+    const centerY = Math.round(pose.faceCenterY * scale + localX * sin + localY * cos);
+    const sum = [0, 0, 0];
+    let count = 0;
+    for (let y = centerY - radius; y <= centerY + radius; y += 1) {
+      for (let x = centerX - radius; x <= centerX + radius; x += 1) {
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        const index = y * width + x;
+        if (hairMask && hairMask[index] > 0.3) continue;
+        const pixel = index * 4;
+        const luma = pixels[pixel] * 0.2126 + pixels[pixel + 1] * 0.7152 + pixels[pixel + 2] * 0.0722;
+        if (luma < 20 || luma > 245) continue;
+        sum[0] += pixels[pixel]; sum[1] += pixels[pixel + 1]; sum[2] += pixels[pixel + 2];
+        count += 1;
+      }
+    }
+    return count >= 4 ? sum.map((value) => value / count) : null;
+  }).filter(Boolean);
+  if (patches.length < 2) return null;
+  return [0, 1, 2].map((channel) => {
+    const values = patches.map((patch) => patch[channel]).sort((a, b) => a - b);
+    return values.length === 2 ? (values[0] + values[1]) / 2 : values[1];
+  });
+}
+
+function measureCaptureSkinTone(source, pose) {
+  const width = 320;
+  const height = Math.max(1, Math.round(width * source.height / source.width));
+  const small = document.createElement('canvas');
+  small.width = width;
+  small.height = height;
+  const smallContext = small.getContext('2d', { willReadFrequently: true });
+  smallContext.drawImage(source, 0, 0, width, height);
+  return sampleSkinTone(smallContext.getImageData(0, 0, width, height).data, width, height, width / source.width, pose);
+}
+
+// Covers the customer's real hair outside the generated cut. The live hair
+// mask is filled from a background plate learned from frames where that pixel
+// was visibly room, and otherwise from push-pull interpolation of surrounding
+// non-hair pixels. The central face is protected so brows/beards stay real.
+// Everything runs at mask resolution in browser memory and is never uploaded.
+const liveHairRemoval = {
+  canvas: null, context: null, fillCanvas: null, fillContext: null,
+  smoothed: null, plate: null, plateWeight: null, version: -1, hasCover: false
+};
+
+function resetLiveHairRemoval() {
+  liveHairRemoval.hasCover = false;
+  liveHairRemoval.smoothed = null;
+  liveHairRemoval.plate = null;
+  liveHairRemoval.plateWeight = null;
+  liveHairRemoval.version = -1;
+}
+
+function suppressLiveRealHair(pose, now) {
+  const mask = window.MirrorlyAR?.getLiveHairMask?.(now);
+  if (!mask || !pose || !(pose.faceWidth > 0)) return;
+  const { width, height } = mask;
+  const count = width * height;
+  const removal = liveHairRemoval;
+  if (!removal.canvas) {
+    removal.canvas = document.createElement('canvas');
+    removal.context = removal.canvas.getContext('2d', { willReadFrequently: true });
+    removal.fillCanvas = document.createElement('canvas');
+    removal.fillContext = removal.fillCanvas.getContext('2d');
+  }
+  if (removal.canvas.width !== width || removal.canvas.height !== height || removal.smoothed?.length !== count) {
+    removal.canvas.width = removal.fillCanvas.width = width;
+    removal.canvas.height = removal.fillCanvas.height = height;
+    removal.smoothed = new Float32Array(count);
+    removal.plate = new Float32Array(count * 3);
+    removal.plateWeight = new Float32Array(count);
+    removal.version = -1;
+  }
+  const drawCover = () => {
+    if (!removal.hasCover) return;
+    context.save();
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(removal.fillCanvas, 0, 0, canvas.width, canvas.height);
+    context.restore();
+  };
+  // The cover is rebuilt only when the segmenter delivers a new mask (<=30 Hz);
+  // display frames in between reuse it to keep the main thread free.
+  if (mask.version === removal.version) {
+    drawCover();
+    return;
+  }
+  removal.version = mask.version;
+  removal.context.drawImage(canvas, 0, 0, width, height);
+  const frame = removal.context.getImageData(0, 0, width, height);
+  const pixels = frame.data;
+  const scale = width / canvas.width;
+  const faceWidth = pose.faceWidth * scale;
+  const faceHeight = pose.faceHeight * scale;
+  const centerX = pose.faceCenterX * scale;
+  const centerY = pose.faceCenterY * scale;
+  const cos = Math.cos(pose.roll || 0);
+  const sin = Math.sin(pose.roll || 0);
+
+  const skin = sampleSkinTone(pixels, width, height, scale, pose, mask.data);
+  if (skin) window.MirrorlyAR.setLiveSkinTone?.(skin);
+
+  // Dilate by one pixel to remove dark segmentation halos, then rise fast /
+  // decay slower so the cover does not flicker between segmenter frames.
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let confidence = 0;
+      for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < width && ny < height) confidence = Math.max(confidence, mask.data[ny * width + nx]);
+      }
+      const index = y * width + x;
+      const target = smoothStep(0.22, 0.6, confidence);
+      const previous = removal.smoothed[index];
+      removal.smoothed[index] = target > previous ? target : previous * 0.55 + target * 0.45;
+    }
+  }
+
+  const color = new Float32Array(count * 3);
+  const valid = new Float32Array(count);
+  const alpha = new Float32Array(count);
+  let coveredPixels = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      const pixel = index * 4;
+      const dx = x - centerX, dy = y - centerY;
+      const localX = (dx * cos + dy * sin) / Math.max(1, faceWidth);
+      const localY = (-dx * sin + dy * cos) / Math.max(1, faceHeight);
+      // Eyebrows-to-chin stays real; only scalp/temple/length hair is replaced.
+      const faceDistance = Math.hypot(localX / 0.42, (localY - 0.14) / 0.4);
+      const faceProtection = 1 - smoothStep(0.85, 1.05, faceDistance);
+      const hair = removal.smoothed[index];
+      alpha[index] = hair * (1 - faceProtection);
+      if (alpha[index] >= 0.01) coveredPixels += 1;
+      color[index * 3] = pixels[pixel];
+      color[index * 3 + 1] = pixels[pixel + 1];
+      color[index * 3 + 2] = pixels[pixel + 2];
+      valid[index] = 1 - hair;
+      // Learn the room only well outside the head and torso envelope, where a
+      // pixel cannot be face, neck or clothing that would ghost later.
+      const headDistance = Math.hypot(localX / 1.0, (localY + 0.15) / 1.0);
+      const torso = Math.abs(localX) < 1.7 && localY > 0.35;
+      if (hair < 0.05 && mask.data[index] < 0.08 && headDistance > 1.05 && !torso) {
+        const weight = removal.plateWeight[index];
+        const rate = weight > 0 ? 0.2 : 1;
+        for (let channel = 0; channel < 3; channel += 1) {
+          removal.plate[index * 3 + channel] += (pixels[pixel + channel] - removal.plate[index * 3 + channel]) * rate;
+        }
+        removal.plateWeight[index] = Math.min(1, weight + 0.2);
+      }
+    }
+  }
+  removal.hasCover = coveredPixels > 0;
+  if (!removal.hasCover) return;
+  const filled = window.MirrorlyTracking.pushPullFill(color, valid, width, height);
+  const output = removal.fillContext.createImageData(width, height);
+  for (let index = 0; index < count; index += 1) {
+    if (alpha[index] < 0.01) continue;
+    const plate = removal.plateWeight[index] ** 2;
+    const pixel = index * 4;
+    for (let channel = 0; channel < 3; channel += 1) {
+      output.data[pixel + channel] = removal.plate[index * 3 + channel] * plate + filled[index * 3 + channel] * (1 - plate);
+    }
+    output.data[pixel + 3] = Math.round(255 * alpha[index]);
+  }
+  removal.fillContext.putImageData(output, 0, 0);
+  drawCover();
+}
+
 function compositeLiveAr(now) {
   const arStatus = window.MirrorlyAR?.getStatus(now);
   if (!liveAiHairReady() || !arStatus?.tracking) return;
@@ -2324,7 +2573,10 @@ function compositeLiveAr(now) {
   const generatedHairIsActive = Boolean(
     state.liveAiHair && state.liveAiHairKey === currentLookKey()
   );
-  if (generatedHairIsActive) drawLiveHairlineBlend(arStatus.pose);
+  if (generatedHairIsActive) {
+    suppressLiveRealHair(arStatus.pose, now);
+    drawLiveHairlineBlend(arStatus.pose);
+  }
   context.save();
   context.imageSmoothingEnabled = true;
   context.globalAlpha = 1;

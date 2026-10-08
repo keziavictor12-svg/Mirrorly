@@ -260,15 +260,149 @@
     return [pose.x + p[0], pose.y + p[1], p[2]];
   }
 
+  function aiViewAngle(pose, attachment) {
+    const relative = rotatePoint(pose.quaternion,
+      rotatePoint([-attachment.quaternion[0], -attachment.quaternion[1], -attachment.quaternion[2], attachment.quaternion[3]], [0, 0, 1]));
+    return Math.acos(clamp(relative[2], -1, 1));
+  }
+
   function aiViewOpacity(pose, attachment) {
     // A single edited portrait has no unseen side/back view. Hide gracefully
     // outside its useful range rather than showing a detached, hollow billboard.
-    const relative = rotatePoint(pose.quaternion,
-      rotatePoint([-attachment.quaternion[0], -attachment.quaternion[1], -attachment.quaternion[2], attachment.quaternion[3]], [0, 0, 1]));
-    const angle = Math.acos(clamp(relative[2], -1, 1));
+    const angle = aiViewAngle(pose, attachment);
     const fadeStart = attachment.viewFadeStart ?? 0.61;
     const fadeEnd = Math.max(fadeStart + 1e-6, attachment.viewFadeEnd ?? 0.78);
     return clamp((fadeEnd - angle) / (fadeEnd - fadeStart), 0, 1);
+  }
+
+  // View-dependent texturing for front/left/right generated views. The nearest
+  // view is drawn first; at most one neighbour is layered over it so sequential
+  // "over" compositing yields a normalized two-view blend instead of ghosting
+  // three textures. Overall opacity still fades once every view is out of range.
+  function aiViewBlend(pose, attachments) {
+    const opacity = attachments.map(() => 0);
+    const views = attachments.map((attachment, index) => {
+      const coverage = aiViewOpacity(pose, attachment);
+      return { index, coverage, weight: coverage > 0 ? coverage / Math.pow(aiViewAngle(pose, attachment) + 0.06, 4) : 0 };
+    }).filter((view) => view.weight > 0).sort((a, b) => b.weight - a.weight).slice(0, 2);
+    if (!views.length) return { opacity, order: [] };
+    const total = Math.max(...views.map((view) => view.coverage));
+    let accumulated = 0;
+    views.forEach((view, k) => {
+      accumulated += view.weight;
+      opacity[view.index] = k === 0 ? total : total * view.weight / accumulated;
+    });
+    return { opacity, order: views.map((view) => view.index) };
+  }
+
+  // Rigid upper-face landmarks: forehead, brow ridge, temples, eye corners and
+  // nose bridge. Mouth and jaw are excluded because expressions move them.
+  const personalAnchorIds = Object.freeze([10, 151, 9, 8, 168, 6, 108, 337, 67, 297, 109, 338,
+    54, 284, 21, 251, 127, 356, 162, 389, 70, 300, 33, 263, 133, 362]);
+
+  // Store the customer's own captured landmarks in head-local, face-width units
+  // (same space as capturePointToHead). Numeric registration geometry only.
+  function capturePersonalAnchors(landmarks, width, height, pose) {
+    if (!landmarks || !pose?.quaternion || !(pose.faceWidth > 0)) return null;
+    const inverse = [-pose.quaternion[0], -pose.quaternion[1], -pose.quaternion[2], pose.quaternion[3]];
+    return personalAnchorIds.map((id) => {
+      const p = landmarks[id];
+      return rotatePoint(inverse, [
+        ((1 - p.x) * width - pose.x) / pose.faceWidth,
+        (p.y * height - pose.y) / pose.faceWidth,
+        (pose.depthOrigin - p.z) * width / pose.faceWidth
+      ]);
+    });
+  }
+
+  // Fit the attachment to the customer's own current landmarks instead of the
+  // generic canonical face. Solves a robust scale about the head origin plus a
+  // screen translation, so canonical-shape mismatch no longer leaves hair
+  // floating or sliding. Returns null when the measurement is implausible.
+  function registerPersonalAnchors(anchors, landmarks, width, height, pose) {
+    if (!anchors?.length || !landmarks || !pose) return null;
+    const points = [];
+    for (let i = 0; i < anchors.length; i += 1) {
+      const observed = landmarks[personalAnchorIds[i]];
+      if (!observed || !Number.isFinite(observed.x) || !Number.isFinite(observed.y)) continue;
+      const predicted = projectHeadPoint(anchors[i], pose);
+      points.push({ ax: predicted[0] - pose.x, ay: predicted[1] - pose.y,
+        bx: (1 - observed.x) * width - pose.x, by: observed.y * height - pose.y, weight: 1 });
+    }
+    if (points.length < 6) return null;
+    let scale = 1, dx = 0, dy = 0;
+    for (let pass = 0; pass < 3; pass += 1) {
+      const total = points.reduce((sum, p) => sum + p.weight, 0);
+      const m = points.reduce((sum, p) => {
+        sum[0] += p.ax * p.weight; sum[1] += p.ay * p.weight; sum[2] += p.bx * p.weight; sum[3] += p.by * p.weight;
+        return sum;
+      }, [0, 0, 0, 0]).map((v) => v / total);
+      let numerator = 0, denominator = 0;
+      for (const p of points) {
+        numerator += p.weight * ((p.ax - m[0]) * (p.bx - m[2]) + (p.ay - m[1]) * (p.by - m[3]));
+        denominator += p.weight * ((p.ax - m[0]) ** 2 + (p.ay - m[1]) ** 2);
+      }
+      if (denominator < 1e-6) return null;
+      scale = numerator / denominator;
+      dx = m[2] - scale * m[0]; dy = m[3] - scale * m[1];
+      const residuals = points.map((p) => Math.hypot(p.bx - dx - scale * p.ax, p.by - dy - scale * p.ay));
+      const threshold = Math.max(1.5, median(residuals) * 2.5);
+      points.forEach((p, i) => { p.weight = Math.min(1, threshold / Math.max(1e-6, residuals[i])); });
+    }
+    // Implausible corrections indicate a bad detection, not a real head change.
+    if (!(scale > 0.8 && scale < 1.25) || Math.hypot(dx, dy) > pose.faceWidth * 0.3) return null;
+    return { scale, dx, dy };
+  }
+
+  function applyRegistration(point, pose, registration) {
+    if (!registration) return point;
+    return [
+      pose.x + registration.scale * (point[0] - pose.x) + registration.dx,
+      pose.y + registration.scale * (point[1] - pose.y) + registration.dy,
+      point[2] * registration.scale
+    ];
+  }
+
+  // Push-pull hole filling (scattered-data interpolation). weight=1 keeps the
+  // pixel, weight=0 is reconstructed from progressively coarser neighbours.
+  // Used at low resolution to cover the customer's real hair in live view.
+  function pushPullFill(color, weight, width, height) {
+    const levels = [{ color, weight, width, height }];
+    while (levels[levels.length - 1].width > 1 || levels[levels.length - 1].height > 1) {
+      const fine = levels[levels.length - 1];
+      const w = Math.max(1, Math.ceil(fine.width / 2)), h = Math.max(1, Math.ceil(fine.height / 2));
+      const c = new Float32Array(w * h * 3), wt = new Float32Array(w * h);
+      for (let y = 0; y < fine.height; y += 1) for (let x = 0; x < fine.width; x += 1) {
+        const f = y * fine.width + x, k = (y >> 1) * w + (x >> 1), fw = fine.weight[f];
+        if (fw <= 0) continue;
+        wt[k] += fw;
+        c[k * 3] += fine.color[f * 3] * fw; c[k * 3 + 1] += fine.color[f * 3 + 1] * fw; c[k * 3 + 2] += fine.color[f * 3 + 2] * fw;
+      }
+      for (let k = 0; k < w * h; k += 1) {
+        if (wt[k] > 0) { c[k * 3] /= wt[k]; c[k * 3 + 1] /= wt[k]; c[k * 3 + 2] /= wt[k]; }
+        wt[k] = Math.min(1, wt[k]);
+      }
+      levels.push({ color: c, weight: wt, width: w, height: h });
+    }
+    let filled = levels[levels.length - 1].color;
+    for (let level = levels.length - 2; level >= 0; level -= 1) {
+      const fine = levels[level], coarse = levels[level + 1];
+      const out = new Float32Array(fine.width * fine.height * 3);
+      for (let y = 0; y < fine.height; y += 1) {
+        const cy = clamp((y + 0.5) / 2 - 0.5, 0, coarse.height - 1), y0 = Math.floor(cy), y1 = Math.min(coarse.height - 1, y0 + 1), ty = cy - y0;
+        for (let x = 0; x < fine.width; x += 1) {
+          const cx = clamp((x + 0.5) / 2 - 0.5, 0, coarse.width - 1), x0 = Math.floor(cx), x1 = Math.min(coarse.width - 1, x0 + 1), tx = cx - x0;
+          const f = y * fine.width + x, fw = fine.weight[f];
+          for (let ch = 0; ch < 3; ch += 1) {
+            const top = filled[(y0 * coarse.width + x0) * 3 + ch] * (1 - tx) + filled[(y0 * coarse.width + x1) * 3 + ch] * tx;
+            const bottom = filled[(y1 * coarse.width + x0) * 3 + ch] * (1 - tx) + filled[(y1 * coarse.width + x1) * 3 + ch] * tx;
+            out[f * 3 + ch] = fine.color[f * 3 + ch] * fw + (top * (1 - ty) + bottom * ty) * (1 - fw);
+          }
+        }
+      }
+      filled = out;
+    }
+    return filled;
   }
 
   function backgroundRepairOpacity(pose, attachment) {
@@ -412,8 +546,8 @@
   }
 
   const api = { canonical, headOrigin, faceWidthCm, transform, screenRotation, quaternionFromRotation, rotationFromMatrix, fitFace, OneEuroFilter, PoseFilter, trackingAge,
-    rotatePoint, capturePointToHead, projectHeadPoint, aiViewOpacity, backgroundRepairOpacity, shouldDisplayAiHair, sealedFaceTriangles, fillHairMatteHoles,
-    orderedContour, selectHeadHair, captureEdgeAlpha };
+    rotatePoint, capturePointToHead, projectHeadPoint, aiViewAngle, aiViewOpacity, aiViewBlend, backgroundRepairOpacity, shouldDisplayAiHair, sealedFaceTriangles, fillHairMatteHoles,
+    orderedContour, selectHeadHair, captureEdgeAlpha, personalAnchorIds, capturePersonalAnchors, registerPersonalAnchors, applyRegistration, pushPullFill };
   root.MirrorlyTracking = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

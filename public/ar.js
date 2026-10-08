@@ -45,6 +45,21 @@
   let measuringImage = false;
   let modelLoadVersion = 0;
   const modelCache = new Map();
+  // Generated AI views (front plus optional left/right) attached to the head.
+  let aiViews = [];
+  let liveSkinTone = null;
+  // Live real-hair segmentation: a separate VIDEO-mode segmenter so capture
+  // segmentation (IMAGE mode) is unaffected. Masks stay in browser memory.
+  let liveHairSegmenter = null;
+  let liveHairSegmenterPromise = null;
+  let liveHairSegmenterFailed = false;
+  let liveSegmentCanvas = null;
+  let liveHairMask = null;
+  let lastLiveSegmentAt = -Infinity;
+  let lastLiveSegmentTimestamp = -1;
+  let liveSegmentMs = 0;
+  let liveSegmentIntervalMs = 1000 / 30;
+  const LIVE_SEGMENT_WIDTH = 320;
 
   const current = {
     x: 0,
@@ -85,16 +100,91 @@
     }
   }
 
-  async function createHairSegmenter(delegate) {
+  async function createHairSegmenter(delegate, runningMode = 'IMAGE') {
     return ImageSegmenter.createFromOptions(visionFileset, {
       baseOptions: {
         modelAssetPath: './models/hair_segmenter.tflite',
         delegate
       },
-      runningMode: 'IMAGE',
+      runningMode,
       outputCategoryMask: false,
       outputConfidenceMasks: true
     });
+  }
+
+  function hairConfidenceMask(result, segmenter) {
+    const masks = result.confidenceMasks || [];
+    const labels = segmenter.getLabels?.() || [];
+    const labelIndex = labels.findIndex((label) => label.toLowerCase() === 'hair');
+    const hairIndex = labelIndex >= 0 ? labelIndex : (masks.length > 1 ? 1 : 0);
+    return masks[hairIndex] || masks[masks.length - 1] || null;
+  }
+
+  function ensureLiveHairSegmenter() {
+    if (liveHairSegmenter || liveHairSegmenterFailed || !visionFileset) return liveHairSegmenter;
+    if (!liveHairSegmenterPromise) {
+      liveHairSegmenterPromise = createHairSegmenter('GPU', 'VIDEO')
+        .catch(() => createHairSegmenter('CPU', 'VIDEO'))
+        .then((segmenter) => { liveHairSegmenter = segmenter; })
+        .catch((error) => {
+          // Live removal is an enhancement; the AI layer still renders without it.
+          liveHairSegmenterFailed = true;
+          console.warn('Mirrorly live hair segmentation unavailable', error);
+        });
+    }
+    return null;
+  }
+
+  function updateLiveHairMask(now) {
+    const segmenter = ensureLiveHairSegmenter();
+    if (!segmenter || now - lastLiveSegmentAt < liveSegmentIntervalMs) return;
+    lastLiveSegmentAt = now;
+    const width = LIVE_SEGMENT_WIDTH;
+    const height = Math.max(1, Math.round(width * videoElement.videoHeight / videoElement.videoWidth));
+    if (!liveSegmentCanvas) liveSegmentCanvas = document.createElement('canvas');
+    if (liveSegmentCanvas.width !== width || liveSegmentCanvas.height !== height) {
+      liveSegmentCanvas.width = width;
+      liveSegmentCanvas.height = height;
+    }
+    const segmentContext = liveSegmentCanvas.getContext('2d');
+    const started = performance.now();
+    try {
+      // Match the mirrored customer-facing preview.
+      segmentContext.setTransform(-1, 0, 0, 1, width, 0);
+      segmentContext.drawImage(videoElement, 0, 0, width, height);
+      segmentContext.setTransform(1, 0, 0, 1, 0, 0);
+      const timestamp = Math.max(now, lastLiveSegmentTimestamp + 0.001);
+      lastLiveSegmentTimestamp = timestamp;
+      segmenter.segmentForVideo(liveSegmentCanvas, timestamp, (result) => {
+        try {
+          const mask = hairConfidenceMask(result, segmenter);
+          if (!mask) return;
+          const values = mask.getAsFloat32Array();
+          if (!liveHairMask || liveHairMask.data.length !== values.length) {
+            liveHairMask = { width: mask.width, height: mask.height, data: new Float32Array(values.length), version: 0, at: now };
+          }
+          liveHairMask.data.set(values);
+          liveHairMask.width = mask.width;
+          liveHairMask.height = mask.height;
+          liveHairMask.version += 1;
+          liveHairMask.at = now;
+        } finally {
+          result.close?.();
+        }
+      });
+    } catch {
+      // Keep the previous mask briefly; it expires in getLiveHairMask.
+    } finally {
+      const elapsed = performance.now() - started;
+      liveSegmentMs = liveSegmentMs ? liveSegmentMs * 0.8 + elapsed * 0.2 : elapsed;
+      liveSegmentIntervalMs = Math.max(1000 / 30, liveSegmentMs * 1.5);
+    }
+  }
+
+  function getLiveHairMask(now = performance.now()) {
+    // Local compositing input only; never part of status diagnostics.
+    if (!enabled || !liveHairMask || now - liveHairMask.at > 250) return null;
+    return liveHairMask;
   }
 
   async function getHairSegmenter() {
@@ -345,8 +435,78 @@
     }
   }
 
-  function setHair(sourceCanvas, style, color, foregroundCanvas = null, repairCanvas = null) {
+  function createCanvasTexture(source) {
+    const texture = new THREE.CanvasTexture(source);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.flipY = false;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  function shapeAttachmentMesh(mesh, attachment) {
+    mesh.geometry.dispose();
+    // A subdivided, landmark-depth strip curves around the forehead/temples.
+    // It remains single-view 2.5D, not a generated volumetric hairstyle model.
+    mesh.geometry = attachment ? new THREE.PlaneGeometry(1, 1, 48, 8) : new THREE.PlaneGeometry(1, 1);
+    if (!attachment) return;
+    const positions = mesh.geometry.attributes.position;
+    const uv = mesh.geometry.attributes.uv;
+    for (let i = 0; i < positions.count; i += 1) {
+      // flipY=false means v=0 is the top row of the source canvas.
+      const p = tracking.capturePointToHead(attachment, uv.getX(i), uv.getY(i));
+      positions.setXYZ(i, ...p);
+    }
+    mesh.geometry.userData.headPoints = Float32Array.from(positions.array);
+    positions.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+  }
+
+  function createRegistrationFilters() {
+    return { x: new tracking.OneEuroFilter(2.0, 0.02), y: new tracking.OneEuroFilter(2.0, 0.02),
+      scale: new tracking.OneEuroFilter(1.5, 0.5) };
+  }
+
+  function createAiView(back, front, attachment, backTexture, frontTexture, owned) {
+    return { back, front, attachment, backTexture, frontTexture, owned,
+      registration: null, filters: createRegistrationFilters(), gain: [1, 1, 1] };
+  }
+
+  function disposeExtraAiViews() {
+    for (const view of aiViews) {
+      if (!view.owned) continue;
+      for (const mesh of [view.back, view.front]) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+      }
+      view.backTexture?.dispose();
+      view.frontTexture?.dispose();
+    }
+    aiViews = [];
+  }
+
+  function addExtraAiView(view) {
+    if (!view?.source || !view.attachment) return;
+    const backTexture = createCanvasTexture(view.source);
+    const frontTexture = view.foregroundSource ? createCanvasTexture(view.foregroundSource) : null;
+    const back = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hairMesh.material.clone());
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hairFrontMesh.material.clone());
+    back.material.map = backTexture;
+    front.material.map = frontTexture;
+    front.material.depthTest = false;
+    for (const mesh of [back, front]) {
+      mesh.material.toneMapped = false;
+      mesh.material.needsUpdate = true;
+      mesh.visible = false;
+      shapeAttachmentMesh(mesh, view.attachment);
+      scene.add(mesh);
+    }
+    aiViews.push(createAiView(back, front, view.attachment, backTexture, frontTexture, true));
+  }
+
+  function setHair(sourceCanvas, style, color, foregroundCanvas = null, repairCanvas = null, extraViews = []) {
     if (!renderer || !sourceCanvas || !style) return;
+    disposeExtraAiViews();
     hairTexture?.dispose();
     hairTexture = new THREE.CanvasTexture(sourceCanvas);
     hairTexture.colorSpace = THREE.SRGBColorSpace;
@@ -389,27 +549,16 @@
       positions.needsUpdate = true;
       backgroundRepairMesh.frustumCulled = false;
     }
-    for (const mesh of [hairMesh, hairFrontMesh]) {
-      mesh.geometry.dispose();
-      // A subdivided, landmark-depth strip curves around the forehead/temples.
-      // It remains single-view 2.5D, not a generated volumetric hairstyle model.
-      mesh.geometry = style.aiAttachment ? new THREE.PlaneGeometry(1, 1, 48, 8) : new THREE.PlaneGeometry(1, 1);
-      if (style.aiAttachment) {
-        const positions = mesh.geometry.attributes.position;
-        const uv = mesh.geometry.attributes.uv;
-        for (let i = 0; i < positions.count; i += 1) {
-          // flipY=false means v=0 is the top row of the source canvas.
-          const p = tracking.capturePointToHead(style.aiAttachment, uv.getX(i), uv.getY(i));
-          positions.setXYZ(i, ...p);
-        }
-        mesh.geometry.userData.headPoints = Array.from(positions.array);
-        positions.setUsage(THREE.DynamicDrawUsage);
-        mesh.frustumCulled = false;
-      }
-    }
+    for (const mesh of [hairMesh, hairFrontMesh]) shapeAttachmentMesh(mesh, style.aiAttachment);
     hairFrontMesh.material.depthTest = !style.aiAttachment;
     hairMesh.material.toneMapped = !style.aiAttachment;
     hairFrontMesh.material.toneMapped = !style.aiAttachment;
+    hairMesh.material.color.setRGB(1, 1, 1);
+    hairFrontMesh.material.color.setRGB(1, 1, 1);
+    if (style.aiAttachment) {
+      aiViews.push(createAiView(hairMesh, hairFrontMesh, style.aiAttachment, null, null, false));
+      for (const view of extraViews || []) addExtraAiView(view);
+    }
     styleProfile = {
       id: style.id,
       faceOpeningRatio: style.faceOpeningRatio,
@@ -442,11 +591,17 @@
       filteredFacePose = null;
       latestLandmarks = null;
       poseFilter?.reset();
+      resetRegistrations();
       trackingStartedAt = null;
       detectionCount = 0;
     }
     enabled = value;
+    if (!value) {
+      liveHairMask = null;
+      liveSkinTone = null;
+    }
     if (!value && hairMesh) {
+      for (const view of aiViews) { view.back.visible = false; view.front.visible = false; }
       hairMesh.visible = false;
       hairFrontMesh.visible = false;
       backgroundRepairMesh.visible = false;
@@ -491,12 +646,38 @@
     });
   }
 
+  function resetRegistrations() {
+    for (const view of aiViews) {
+      view.registration = null;
+      view.filters = createRegistrationFilters();
+    }
+  }
+
+  function updateRegistrations(landmarks, width, height, now) {
+    for (const view of aiViews) {
+      const anchors = view.attachment.personalAnchors;
+      if (!anchors) continue;
+      const measured = tracking.registerPersonalAnchors(anchors, landmarks, width, height, filteredFacePose);
+      // Keep the previous smoothed registration on an implausible measurement.
+      if (!measured) continue;
+      view.registration = {
+        scale: Math.exp(view.filters.scale.filter(Math.log(measured.scale), now)),
+        dx: view.filters.x.filter(measured.dx, now),
+        dy: view.filters.y.filter(measured.dy, now)
+      };
+    }
+  }
+
   function processLandmarks(landmarks, width, height, controls, facialMatrix, now) {
     const pose = tracking.fitFace(landmarks, width, height, facialMatrix);
     if (!pose) return false;
-    if (lastFaceAt === null || now - lastFaceAt >= 220) poseFilter.reset();
+    if (lastFaceAt === null || now - lastFaceAt >= 220) {
+      poseFilter.reset();
+      resetRegistrations();
+    }
     rawFacePose = pose;
     filteredFacePose = poseFilter.filter(pose, now);
+    updateRegistrations(landmarks, width, height, now);
     latestLandmarks = landmarks;
     applyFacePose(filteredFacePose, controls);
     lastFaceAt = now;
@@ -533,6 +714,78 @@
     faceOccluder.rotation.set(0, 0, 0);
   }
 
+  function legacyForeheadCorrection(attachment) {
+    // Older attachments without personal anchors: correct only the forehead
+    // point against the measured landmark, bounded so noise cannot fling hair.
+    if (!Number.isFinite(attachment.foreheadX) || !Number.isFinite(attachment.foreheadY)
+      || !Number.isFinite(filteredFacePose.foreheadX) || !Number.isFinite(filteredFacePose.foreheadY)) return null;
+    const anchorU = (attachment.foreheadX - attachment.crop.x) / attachment.crop.width;
+    const anchorV = (attachment.foreheadY - attachment.crop.y) / attachment.crop.height;
+    const projected = tracking.projectHeadPoint(tracking.capturePointToHead(attachment, anchorU, anchorV), filteredFacePose);
+    const limit = current.faceWidth * 0.09;
+    return {
+      scale: 1,
+      dx: THREE.MathUtils.clamp(filteredFacePose.foreheadX - projected[0], -limit, limit) * 0.88,
+      dy: THREE.MathUtils.clamp(filteredFacePose.foreheadY - projected[1], -limit, limit) * 0.88
+    };
+  }
+
+  function updateViewLighting(view) {
+    // Generated hair was matched to the capture exposure. Follow later changes
+    // in exposure/white balance measured on the customer's skin each frame.
+    const reference = view.attachment.skinReference;
+    const target = [1, 1, 1];
+    if (reference && liveSkinTone) {
+      for (let c = 0; c < 3; c += 1) {
+        const ratio = THREE.MathUtils.clamp(liveSkinTone[c] / Math.max(8, reference[c]), 0.7, 1.4);
+        target[c] = Math.pow(ratio, 2.2);
+      }
+    }
+    for (let c = 0; c < 3; c += 1) view.gain[c] += (target[c] - view.gain[c]) * 0.12;
+    view.back.material.color.setRGB(...view.gain);
+    view.front.material.color.setRGB(...view.gain);
+  }
+
+  function renderAiViews(baseOpacity) {
+    const blend = tracking.aiViewBlend(filteredFacePose, aiViews.map((view) => view.attachment));
+    aiViews.forEach((view, index) => {
+      const rank = blend.order.indexOf(index);
+      const viewOpacity = baseOpacity * blend.opacity[index];
+      const visible = rank >= 0 && viewOpacity > 0.001;
+      view.back.visible = visible;
+      view.front.visible = visible && Boolean(view.front.material.map);
+      if (!visible) return;
+      // Nearest view first, its neighbour layered over it with the blend weight.
+      view.back.renderOrder = 1 + rank * 0.5;
+      view.front.renderOrder = 3 + rank * 0.5;
+      // Capture pixels already contain the original rotation. Undo it once,
+      // then rotate around the tracked head origin, not the image crop center,
+      // and register to the customer's own current landmarks.
+      const registration = view.attachment.personalAnchors
+        ? view.registration : legacyForeheadCorrection(view.attachment);
+      for (const [mesh, foreground] of [[view.back, false], [view.front, true]]) {
+        if (!mesh.visible) continue;
+        const positions = mesh.geometry.attributes.position;
+        const points = mesh.geometry.userData.headPoints;
+        for (let i = 0; i < positions.count; i += 1) {
+          const projected = tracking.projectHeadPoint([points[i * 3], points[i * 3 + 1], points[i * 3 + 2]], filteredFacePose);
+          const p = tracking.applyRegistration(projected, filteredFacePose, registration);
+          positions.setXYZ(i, p[0], p[1], p[2] + (foreground ? current.faceWidth : 0));
+        }
+        positions.needsUpdate = true;
+        mesh.position.set(0, 0, 0);
+        mesh.scale.set(1, 1, 1);
+        mesh.quaternion.identity();
+        mesh.material.opacity = viewOpacity;
+      }
+      updateViewLighting(view);
+    });
+  }
+
+  function setLiveSkinTone(rgb) {
+    liveSkinTone = Array.isArray(rgb) && rgb.length === 3 && rgb.every(Number.isFinite) ? rgb.slice() : null;
+  }
+
   function renderTrackedHair(now, controls, showOverlay) {
     const freshness = tracking.trackingAge(now, lastFaceAt);
     const shouldShow = Boolean(enabled && styleProfile && showOverlay && freshness.tracking && filteredFacePose);
@@ -543,6 +796,7 @@
     backgroundRepairMesh.visible = Boolean(shouldShow && !useTrue3d && styleProfile.aiAttachment && backgroundRepairTexture);
     hairModelMount.visible = useTrue3d;
     faceOccluder.visible = useTrue3d || useLayered2d;
+    for (const view of aiViews) if (view.owned) { view.back.visible = false; view.front.visible = false; }
 
     if (shouldShow) {
       // Filter once per measured frame, not repeatedly per display frame.
@@ -573,35 +827,7 @@
         });
         updateFaceOccluder(true, profile);
       } else if (attachment) {
-        // Capture pixels already contain the original rotation. Undo it once,
-        // then rotate around the tracked head origin, not the image crop center.
-        // Correct the projected layer against the currently measured forehead
-        // so canonical-fit residuals and filter lag do not leave the wig floating.
-        let anchorDx = 0;
-        let anchorDy = 0;
-        if (Number.isFinite(attachment.foreheadX) && Number.isFinite(attachment.foreheadY)
-          && Number.isFinite(filteredFacePose.foreheadX) && Number.isFinite(filteredFacePose.foreheadY)) {
-          const anchorU = (attachment.foreheadX - attachment.crop.x) / attachment.crop.width;
-          const anchorV = (attachment.foreheadY - attachment.crop.y) / attachment.crop.height;
-          const anchorPoint = tracking.capturePointToHead(attachment, anchorU, anchorV);
-          const projectedAnchor = tracking.projectHeadPoint(anchorPoint, filteredFacePose);
-          const limit = current.faceWidth * 0.09;
-          anchorDx = THREE.MathUtils.clamp(filteredFacePose.foreheadX - projectedAnchor[0], -limit, limit) * 0.88;
-          anchorDy = THREE.MathUtils.clamp(filteredFacePose.foreheadY - projectedAnchor[1], -limit, limit) * 0.88;
-        }
-        for (const [mesh, foreground] of [[hairMesh, false], [hairFrontMesh, true]]) {
-          const positions = mesh.geometry.attributes.position;
-          const points = mesh.geometry.userData.headPoints;
-          for (let i = 0; i < positions.count; i += 1) {
-            const p = tracking.projectHeadPoint(points.slice(i * 3, i * 3 + 3), filteredFacePose);
-            positions.setXYZ(i, p[0] + anchorDx, p[1] + anchorDy, p[2] + (foreground ? current.faceWidth : 0));
-          }
-          positions.needsUpdate = true;
-          mesh.position.set(0, 0, 0);
-          mesh.scale.set(1, 1, 1);
-          mesh.quaternion.identity();
-          mesh.material.opacity = opacity;
-        }
+        renderAiViews(current.opacity * freshness.opacity);
         updateFaceOccluder(true, { occluderDepth: 0 });
       } else {
         // Planes are honest fallbacks: they cannot expose unseen side/back hair.
@@ -641,11 +867,7 @@
       try {
         segmenter.segment(imageSource, (result) => {
           try {
-            const masks = result.confidenceMasks || [];
-            const labels = segmenter.getLabels?.() || [];
-            const labelIndex = labels.findIndex((label) => label.toLowerCase() === 'hair');
-            const hairIndex = labelIndex >= 0 ? labelIndex : (masks.length > 1 ? 1 : 0);
-            const mask = masks[hairIndex] || masks[masks.length - 1];
+            const mask = hairConfidenceMask(result, segmenter);
             if (!mask) throw new Error('Hair segmentation returned no confidence mask');
             const values = mask.getAsFloat32Array();
             resolve({
@@ -698,6 +920,8 @@
         detectionIntervalMs = Math.max(1000 / 60, inferenceMs * 1.2);
       }
     }
+    // Real-hair removal is only needed while generated hair is displayed.
+    if (showOverlay && styleProfile.aiAttachment && filteredFacePose) updateLiveHairMask(now);
     renderTrackedHair(now, controls, showOverlay);
   }
 
@@ -783,7 +1007,11 @@
           ? Math.round(Math.max(0, detectionCount - 1) * 1000 / (now - trackingStartedAt)) : 0,
         fitErrorPx: Math.round((current.fitErrorPx ?? 0) * 10) / 10,
         frameAgeMs: lastFaceAt === null ? null : Math.max(0, Math.round(now - lastFaceAt)),
-        occluder: 'landmark-depth-mesh'
+        occluder: 'landmark-depth-mesh',
+        aiViews: aiViews.length,
+        personalRegistration: aiViews.some((view) => view.registration),
+        liveHairSegmentationMs: Math.round(liveSegmentMs * 10) / 10,
+        liveHairSegmentation: Boolean(getLiveHairMask(now))
       }
     };
   }
@@ -802,7 +1030,8 @@
       depthSamples: [127, 10, 356].map((index) => ({
         x: (1 - latestLandmarks[index].x) * outputCanvas.width,
         depth: (pose.depthOrigin - latestLandmarks[index].z) * outputCanvas.width
-      })).sort((a, b) => a.x - b.x)
+      })).sort((a, b) => a.x - b.x),
+      personalAnchors: tracking.capturePersonalAnchors(latestLandmarks, outputCanvas.width, outputCanvas.height, pose)
     };
   }
 
@@ -829,6 +1058,8 @@
   function dispose() {
     setEnabled(false);
     clearActiveModel();
+    disposeExtraAiViews();
+    liveHairSegmenter?.close();
     hairTexture?.dispose();
     hairFrontTexture?.dispose();
     backgroundRepairTexture?.dispose();
@@ -871,6 +1102,8 @@
     getStatus,
     getCapturePose,
     createCaptureFaceMask,
+    getLiveHairMask,
+    setLiveSkinTone,
     dispose
   };
 })();

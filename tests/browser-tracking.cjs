@@ -312,6 +312,62 @@ async function main() {
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0, 590);
       checkNoRepairGhost();
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
+      if (!window.MirrorlyAR.getStatus(now).metrics.personalRegistration) throw new Error('Personal landmark registration did not run');
+
+      // Multi-view: a side salon view takes over where a single front view hides.
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true);
+      for (let i = 0; i < 20; i++) frame(0.45);
+      const sidePose = window.MirrorlyAR.getCapturePose();
+      const sideMarker = document.createElement('canvas'); sideMarker.width = 20; sideMarker.height = 20;
+      const sideContext = sideMarker.getContext('2d'); sideContext.fillStyle = '#ff0000'; sideContext.fillRect(0, 0, 20, 20);
+      const sideAttachment = {
+        crop: { x: sidePose.headX - 60, y: sidePose.headY - 120, width: 120, height: 80 },
+        headX: sidePose.headX, headY: sidePose.headY, faceWidth: sidePose.faceWidth,
+        quaternion: sidePose.quaternion, depth: sidePose.foreheadDepth, depthSamples: sidePose.depthSamples,
+        personalAnchors: sidePose.personalAnchors, depthStrength: 0.32,
+        viewFadeStart: 30 * Math.PI / 180, viewFadeEnd: 45 * Math.PI / 180
+      };
+      window.MirrorlyAR.setHair(merged.source, merged.profile, '#70432f', merged.foregroundSource, null,
+        [{ source: sideMarker, foregroundSource: null, attachment: sideAttachment }]);
+      const redPixels = () => {
+        const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+        markerGl.readPixels(0, 0, canvas.width, canvas.height, markerGl.RGBA, markerGl.UNSIGNED_BYTE, pixels);
+        let red = 0;
+        for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 3] > 120 && pixels[i] > 150 && pixels[i + 1] < 60) red++;
+        return red;
+      };
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true);
+      for (let i = 0; i < 20; i++) frame(0);
+      const frontRed = redPixels();
+      if (window.MirrorlyAR.getStatus(now).metrics.aiViews !== 2) throw new Error('Side view was not attached');
+      for (let i = 0; i < 30; i++) frame(1);
+      const turnedRed = redPixels();
+      if (turnedRed < 200 || turnedRed < frontRed * 4) throw new Error('Side view did not take over at a wide turn: ' + frontRed + '/' + turnedRed);
+      window.MirrorlyAR.setHair(merged.source, merged.profile, '#70432f', merged.foregroundSource, null);
+      if (window.MirrorlyAR.getStatus(now).metrics.aiViews !== 1) throw new Error('Side view meshes were not released');
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
+
+      // Live real-hair removal on the actual preview canvas, mocked mask only.
+      const savedLiveMask = window.MirrorlyAR.getLiveHairMask;
+      try {
+        resizeCanvas(1280, 720);
+        context.fillStyle = '#4a7fb0'; context.fillRect(0, 0, 1280, 720);
+        context.fillStyle = '#d9a383'; context.beginPath(); context.ellipse(640, 380, 95, 125, 0, 0, Math.PI * 2); context.fill();
+        context.fillStyle = '#140c08'; context.fillRect(520, 150, 240, 110);
+        const liveMask = { width: 320, height: 180, data: new Float32Array(320 * 180), version: 1, at: 0 };
+        for (let y = 38; y < 65; y++) for (let x = 130; x < 190; x++) liveMask.data[y * 320 + x] = 1;
+        window.MirrorlyAR.getLiveHairMask = () => liveMask;
+        const removalPose = { faceCenterX: 640, faceCenterY: 380, faceWidth: 190, faceHeight: 250, roll: 0 };
+        resetLiveHairRemoval();
+        suppressLiveRealHair(removalPose, 0);
+        const px = (x, y) => [...context.getImageData(x, y, 1, 1).data];
+        const removed = px(560, 175), cheek = px(640, 420);
+        if (removed[0] + removed[1] + removed[2] < 200 || removed[2] < 100) throw new Error('Real hair was not replaced by surrounding background: ' + removed);
+        if (Math.abs(cheek[0] - 0xd9) > 2 || Math.abs(cheek[1] - 0xa3) > 2) throw new Error('Face pixels were altered by real-hair removal: ' + cheek);
+      } finally {
+        window.MirrorlyAR.getLiveHairMask = savedLiveMask;
+        resetLiveHairRemoval();
+      }
 
       const tailCanvas = document.createElement('canvas'); tailCanvas.width = 1280; tailCanvas.height = 720;
       const tc = tailCanvas.getContext('2d'); tc.drawImage(portrait, 0, 0);
