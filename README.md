@@ -11,6 +11,16 @@ A single-salon hairstyle preview application combining live, local AI face track
 
 The browser may ask for camera permission. Tracking is local. **Create AI hair for live AR** explicitly uploads one frozen frame to generate the personalized layer; no continuous uploads occur. Style/color changes hide stale AI hair and require another explicit generation. **Optional AI photo** is a separate still-photo workflow.
 
+## Snapchat-style live mirror (Snap Camera Kit)
+
+Mirrorly can show live hairstyles with Snap's own lens engine:
+
+1. Activate Camera Kit with your Snap developer account at https://my-lenses.snapchat.com/camera-kit.
+2. Create or buy hair lenses and add them to a Lens Group. Name each lens after a style (`bob`, `feather`, `v-cut`, `u-cut`, `crew-cut`, `buzz-cut`, `curtain-bangs`, `skin-fade`), or map them with `SNAP_LENS_MAP`.
+3. Put `SNAP_CAMERA_KIT_API_TOKEN` and `SNAP_LENS_GROUP_ID` in `.env.local` (see `.env.example`), then restart `npm start`.
+
+`npm install` builds the Camera Kit browser bundle locally. It is Snap's confidential software, so it is git-ignored and never committed. Without a token or a lens for the selected style, Mirrorly's own live AR is used.
+
 ## Enable realistic AI stills
 
 Local camera/tracking works without a key. Personalized live AI hair and the optional merged still require funded API access; the key stays in the local Node server.
@@ -55,7 +65,7 @@ Twenty seconds is a target, not a guaranteed or measured completion time. The lo
 
 The tracker fits head position/scale using pose-projected canonical landmarks and quaternion filtering. Its 468-landmark depth occluder seals eye/mouth holes so rear hair cannot leak through them. The personalized AI layer undoes the captured pose and attaches to the current head origin on a subdivided, measured-depth strip, preserving crop offsets and image orientation. Both the renderer and compositor suppress temporary catalog hair, pending AI, and mismatched looks. Diagnostics are available through `MirrorlyAR.getStatus().metrics` without exposing camera pixels. Pose rendering follows the [MediaPipe transformation-matrix model](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker).
 
-Run `npm test` for 40 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
+Run `npm test` for 47 deterministic regressions and `npm run test:browser` with the local server running for the real Edge/WebGL integration test, including all 40 style/color masks and both AI frontend actions. Tests use synthetic face landmarks and mocked API responses; they do not upload photos or call paid AI. Actual webcam accuracy, scalp fitting, and hair replacement still need evaluation; Snapchat-level quality is not yet established. Optional AI Photo keeps its original freeze/hold workflow while sharing the explicitly requested transport optimization.
 
 The foreground mask now follows the captured landmark face contour instead of a generic oval. Head-connected semantic hair retains its full length; generated-image borders receive a localized alpha fade when clipped. The live texture is transparent outside accepted hair and discards every generated face, neck, clothing, original-hair repair, and room pixel. The edit mask protects the measured eyes, nose, cheeks, mouth, and chin. Local compositing forces that central feature region transparent and requires both a material pixel change and support from the selected hairstyle silhouette elsewhere inside the face contour. Live camera pixels receive no cinematic wash or vignette. Regressions use an attributed generic 468-vertex canonical model, not customer photographs.
 
@@ -78,6 +88,6 @@ Test identity preservation and hairstyle consistency across a diverse salon eval
 
 ## Guided salon result
 
-`Create salon result` starts a local quality-gated front, left, and right capture. Mirrorly checks face pose, distance, roll, pitch, and visible hair coverage with MediaPipe before accepting each view. No frame uploads during these checks. After all three views pass, `Generate three salon views` explicitly starts three AI edits. The realistic front result is generated first and appears as soon as it is ready. Mirrorly then sends the left and right edits concurrently, with the approved front result included in both as a consistency reference. The three generated views stay in browser session memory for inspection and individual saving.
+`See realistic result` (the salon result) starts a local quality-gated front, left, and right capture. Mirrorly checks face pose, distance, roll, pitch, and visible hair coverage with MediaPipe before accepting each view. No frame uploads during these checks. After all three views pass, `Generate three salon views` explicitly starts three AI edits. The realistic front result is generated first and appears as soon as it is ready. Mirrorly then sends the left and right edits concurrently, with the approved front result included in both as a consistency reference. The three generated views stay in browser session memory for inspection and individual saving.
 
 This workflow is the realistic salon output. The local live renderer is an approximate preview and does not remove real hair. Three-view generation makes three paid image API calls only after the user presses Generate; selection changes never trigger those calls automatically. Running the two side edits together reduces the normal critical path from three remote generation waits to two while retaining medium quality and all identity, placement, style, and consistency references.

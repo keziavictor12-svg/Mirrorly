@@ -275,6 +275,13 @@
     return clamp((fadeEnd - angle) / (fadeEnd - fadeStart), 0, 1);
   }
 
+  function frontLayerOpacity(pose, attachment) {
+    const angle = aiViewAngle(pose, attachment);
+    const start = attachment.frontFadeStart ?? 20 * Math.PI / 180;
+    const end = Math.max(start + 1e-6, attachment.frontFadeEnd ?? 35 * Math.PI / 180);
+    return clamp((end - angle) / (end - start), 0, 1);
+  }
+
   // View-dependent texturing for front/left/right generated views. The nearest
   // view is drawn first; at most one neighbour is layered over it so sequential
   // "over" compositing yields a normalized two-view blend instead of ghosting
@@ -546,7 +553,7 @@
   }
 
   const api = { canonical, headOrigin, faceWidthCm, transform, screenRotation, quaternionFromRotation, rotationFromMatrix, fitFace, OneEuroFilter, PoseFilter, trackingAge,
-    rotatePoint, capturePointToHead, projectHeadPoint, aiViewAngle, aiViewOpacity, aiViewBlend, backgroundRepairOpacity, shouldDisplayAiHair, sealedFaceTriangles, fillHairMatteHoles,
+    rotatePoint, capturePointToHead, projectHeadPoint, aiViewAngle, aiViewOpacity, aiViewBlend, frontLayerOpacity, backgroundRepairOpacity, shouldDisplayAiHair, sealedFaceTriangles, fillHairMatteHoles,
     orderedContour, selectHeadHair, captureEdgeAlpha, personalAnchorIds, capturePersonalAnchors, registerPersonalAnchors, applyRegistration, pushPullFill };
   root.MirrorlyTracking = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

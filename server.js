@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { snapConfig } = require("./snap-config.cjs");
 
 function loadLocalEnvironment(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -324,6 +325,11 @@ const server = http.createServer((request, response) => {
       targetLatencySeconds: 20,
       outputPixelTarget: 655360
     });
+    return;
+  }
+
+  if (request.method === "GET" && decodedPath === "/api/snap-config") {
+    sendJson(response, 200, snapConfig());
     return;
   }
 

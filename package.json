@@ -5,16 +5,21 @@
   "description": "Local 3D salon hairstyle preview with eight cuts and five colours",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check public/ar.js && node --check public/tracking.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/ar.js && node --check public/tracking.js && node --check public/snap.js && node --check snap-config.cjs",
     "test": "node --test tests/*.test.cjs",
     "test:browser": "node tests/browser-tracking.cjs",
-    "build:3d-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Mirrorly3DAssets.ps1"
+    "build:3d-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Mirrorly3DAssets.ps1",
+    "build:snap": "node scripts/build-snap-camera-kit.cjs",
+    "postinstall": "node scripts/build-snap-camera-kit.cjs",
+    "test:snap": "node tests/snap-live-probe.cjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
+    "@snap/camera-kit": "1.22.0",
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
     "obj2gltf": "^3.2.0"
   }
 }

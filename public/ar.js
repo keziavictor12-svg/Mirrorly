@@ -60,6 +60,7 @@
   let liveSegmentMs = 0;
   let liveSegmentIntervalMs = 1000 / 30;
   const LIVE_SEGMENT_WIDTH = 320;
+  const debugLayers = typeof location !== 'undefined' && new URLSearchParams(location.search).has('debugLayers');
 
   const current = {
     x: 0,
@@ -742,6 +743,12 @@
       }
     }
     for (let c = 0; c < 3; c += 1) view.gain[c] += (target[c] - view.gain[c]) * 0.12;
+    if (debugLayers) {
+      // Diagnostic only (?debugLayers): back layer red, front layer green.
+      view.back.material.color.setRGB(1.6, 0.25, 0.25);
+      view.front.material.color.setRGB(0.25, 1.6, 0.25);
+      return;
+    }
     view.back.material.color.setRGB(...view.gain);
     view.front.material.color.setRGB(...view.gain);
   }
@@ -763,6 +770,11 @@
       // and register to the customer's own current landmarks.
       const registration = view.attachment.personalAnchors
         ? view.registration : legacyForeheadCorrection(view.attachment);
+      // Hair over the face is cut along the frozen capture contour and drawn
+      // without depth testing, so it is the first thing to look wrong as the
+      // head turns or tilts. Retire it from 20 to 35 degrees; the back layer
+      // keeps the outer hairstyle visible to the normal 45 degree limit.
+      const frontOpacity = viewOpacity * tracking.frontLayerOpacity(filteredFacePose, view.attachment);
       for (const [mesh, foreground] of [[view.back, false], [view.front, true]]) {
         if (!mesh.visible) continue;
         const positions = mesh.geometry.attributes.position;
@@ -770,13 +782,15 @@
         for (let i = 0; i < positions.count; i += 1) {
           const projected = tracking.projectHeadPoint([points[i * 3], points[i * 3 + 1], points[i * 3 + 2]], filteredFacePose);
           const p = tracking.applyRegistration(projected, filteredFacePose, registration);
-          positions.setXYZ(i, p[0], p[1], p[2] + (foreground ? current.faceWidth : 0));
+          // Small forward bias: the brow sits ahead of the hairline-depth strip,
+          // and must not hide valid hairline hair in the back layer.
+          positions.setXYZ(i, p[0], p[1], p[2] + current.faceWidth * (foreground ? 1 : 0.1));
         }
         positions.needsUpdate = true;
         mesh.position.set(0, 0, 0);
         mesh.scale.set(1, 1, 1);
         mesh.quaternion.identity();
-        mesh.material.opacity = viewOpacity;
+        mesh.material.opacity = foreground ? frontOpacity : viewOpacity;
       }
       updateViewLighting(view);
     });

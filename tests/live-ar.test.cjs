@@ -133,3 +133,14 @@ test('push-pull fill reconstructs holes from neighbours and keeps valid pixels',
     }
   }
 });
+
+test('front face layer retires before the outer hairstyle at larger turns and tilts', () => {
+  const attachment = viewAttachment(0);
+  assert.equal(tracking.frontLayerOpacity(poseAt(0.15), attachment), 1);
+  const mid = tracking.frontLayerOpacity(poseAt(27.5 * Math.PI / 180), attachment);
+  assert.ok(mid > 0.4 && mid < 0.6);
+  // At 38 degrees the outer hair is still shown, but nothing over the face.
+  const pose = poseAt(38 * Math.PI / 180);
+  assert.equal(tracking.frontLayerOpacity(pose, attachment), 0);
+  assert.ok(tracking.aiViewOpacity(pose, attachment) > 0.4);
+});

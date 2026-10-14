@@ -32,3 +32,6 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Snap Camera Kit bundle: Snap confidential, built locally by npm run build:snap
+public/vendor/snap/

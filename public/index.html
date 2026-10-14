@@ -23,7 +23,7 @@
       <section class="preview-card" aria-label="Hairstyle preview">
         <div class="preview-hud" aria-live="polite">
           <span class="live-dot"></span>
-          <span>LIVE AI AR</span>
+          <span>LIVE PREVIEW</span>
           <strong id="selectedLookLabel">Bob Cut / Chestnut Brown</strong>
         </div>
         <canvas id="previewCanvas" width="960" height="720"></canvas>
@@ -32,7 +32,7 @@
         <div id="emptyState" class="empty-state">
           <div class="face-placeholder" aria-hidden="true"></div>
           <h2>Start the camera</h2>
-          <p>Choose your style and color, then create AI hair for the live mirror. Your camera stays unchanged until the AI result is ready.</p>
+          <p>Choose your style and color to preview the cut live on you. Then tap See realistic result for photo-realistic front and side views of the finished look.</p>
           <button id="startCameraButton" class="primary-button">Start live AI mirror</button>
           <button id="demoButton" class="secondary-button">Try demo mode</button>
         </div>
@@ -53,10 +53,11 @@
           </div>
           <small id="salonCapturePrivacy">Capture checks run locally. Generation uploads the three selected stills only after you press Generate.</small>
         </section>
+        <p id="snapPreviewNote" class="snap-preview-note" hidden>Live preview of shape and length. Tap <strong>See realistic result</strong> for a photo-realistic look.</p>
         <div class="preview-toolbar">
           <div class="toolbar-group">
             <button id="liveArButton" class="glass-button ar-button" disabled>Start live AI AR</button>
-            <button id="captureFaceButton" class="capture-button" disabled>Create salon result</button>
+            <button id="captureFaceButton" class="capture-button" disabled>See realistic result</button>
           </div>
           <button id="snapshotButton" class="glass-button" disabled>Save preview</button>
         </div>
@@ -94,6 +95,7 @@
       }
     </script>
     <script src="ar.js"></script>
+    <script src="snap.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

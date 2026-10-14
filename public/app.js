@@ -22,7 +22,10 @@ const salonCaptureButton = document.querySelector("#salonCaptureButton");
 const salonGenerateButton = document.querySelector("#salonGenerateButton");
 const salonCancelButton = document.querySelector("#salonCancelButton");
 const salonCapturePrivacy = document.querySelector("#salonCapturePrivacy");
+const snapPreviewNote = document.querySelector("#snapPreviewNote");
 const trackingHint = cameraStatus;
+// The live lens shows shape and length; the salon result is the realistic look.
+const SALON_BUTTON_LABEL = "See realistic result";
 // Fit is automatic in the customer-facing UI. Keep stable renderer defaults
 // internally so the MediaPipe measurement remains the single alignment source.
 const liveAiHairButton = document.createElement('button');
@@ -481,6 +484,7 @@ function createStyleButtons() {
           : "This hairstyle is ready for live AI AR");
       renderStylePreviews();
       syncArHair();
+      syncSnapLook();
       scheduleAutomaticAiStill();
     });
     styleGrid.append(button);
@@ -518,6 +522,7 @@ function createColorButtons() {
       updateSelectedLook();
       renderStylePreviews();
       syncArHair();
+      syncSnapLook();
       scheduleAutomaticAiStill();
     });
     colorGrid.append(button);
@@ -557,9 +562,11 @@ async function startCamera() {
     cameraStatus.classList.add("active");
     if (beforeAfterButton) beforeAfterButton.disabled = false;
     captureFaceButton.disabled = true;
-    captureFaceButton.textContent = "Create salon result";
+    captureFaceButton.textContent = SALON_BUTTON_LABEL;
     liveArButton.disabled = true;
     snapshotButton.disabled = true;
+    // Leaving demo: hide the demo lens and stop its portrait feed.
+    syncSnapLook();
     updateSelectedLook();
     renderStylePreviews();
     requestAnimationFrame(render);
@@ -600,6 +607,72 @@ function syncArHair() {
   if (state.liveAr && !useGeneratedHair && !state.liveAiHairGenerating) {
     trackingHint.textContent = 'Camera only - create AI hair for this style and color';
   }
+}
+
+// Snap Camera Kit renders the live hairstyle when a lens exists for the look.
+// It is hidden for the guided salon capture, demo, "hold for before" and pause,
+// where Mirrorly's own tracking and AI results take over.
+const previewCard = canvas.closest('.preview-card');
+
+// Demo mode streams the fictional demo portrait into Snap, so the demo shows
+// the same lenses as the live mirror. Same 4:3 size as the demo canvas.
+let demoFeed = null;
+
+function getDemoFeedStream() {
+  if (!demoFeed) {
+    const feedCanvas = document.createElement('canvas');
+    feedCanvas.width = 960;
+    feedCanvas.height = 720;
+    const feedContext = feedCanvas.getContext('2d');
+    // Pre-mirrored, because Snap mirrors its source like a front camera.
+    feedContext.setTransform(-1, 0, 0, 1, feedCanvas.width, 0);
+    const draw = () => drawDemoScene(feedContext, feedCanvas);
+    draw();
+    demoFeed = { stream: feedCanvas.captureStream(30), timer: setInterval(draw, 33) };
+  }
+  return demoFeed.stream;
+}
+
+function stopDemoFeed() {
+  if (!demoFeed) return;
+  clearInterval(demoFeed.timer);
+  demoFeed.stream.getTracks().forEach((track) => track.stop());
+  demoFeed = null;
+}
+
+function snapLookStream() {
+  if (!state.active || state.salonCaptureActive || !state.showOverlay) return null;
+  if (state.demo) return getDemoFeedStream();
+  return state.liveAr && !state.captured && video.srcObject ? video.srcObject : null;
+}
+
+function snapLookAllowed() {
+  return Boolean(snapLookStream());
+}
+
+async function syncSnapLook() {
+  if (!window.MirrorlySnap) return false;
+  if (!state.demo) stopDemoFeed();
+  let shown = false;
+  const stream = snapLookStream();
+  if (stream) {
+    shown = await window.MirrorlySnap.showLook(stream, previewCard, state.style, state.color);
+    // The selection or mode may have changed while the lens was loading.
+    if (shown && !snapLookAllowed()) {
+      await window.MirrorlySnap.hide();
+      shown = false;
+    }
+  } else {
+    await window.MirrorlySnap.hide();
+  }
+  liveAiHairButton.hidden = shown;
+  snapPreviewNote.hidden = !shown;
+  snapPreviewNote.innerHTML = state.demo
+    ? 'Demo of the live preview. Start the camera, then tap <strong>See realistic result</strong> for a photo-realistic look.'
+    : 'Live preview of shape and length. Tap <strong>See realistic result</strong> for a photo-realistic look.';
+  captureFaceButton.classList.toggle('featured', shown);
+  if (shown) trackingHint.textContent = state.demo ? 'Demo of the live preview' : 'Live preview of the cut';
+  return shown;
 }
 
 function captureLivePortrait() {
@@ -1057,8 +1130,18 @@ function buildLiveAiMergedLayer(image, capture, hairMask = null) {
   foregroundContext.putImageData(hairOnlyPixels, 0, 0);
   // Match the actual measured forehead/temples/jaw, with a soft contact margin.
   // A generic oval masks valid foreground hair underneath the face depth mesh.
+  // The contour keeps a sharp interior but fades outward, so the front layer
+  // can never end in a hard face-shaped edge once the head moves.
+  const softFaceMask = document.createElement('canvas');
+  softFaceMask.width = width;
+  softFaceMask.height = height;
+  const softFaceContext = softFaceMask.getContext('2d');
+  softFaceContext.filter = 'blur(' + Math.max(2, faceWidth * 0.035) + 'px)';
+  softFaceContext.drawImage(capture.faceMask, 0, 0, width, height);
+  softFaceContext.filter = 'none';
+  softFaceContext.drawImage(capture.faceMask, 0, 0, width, height);
   foregroundContext.globalCompositeOperation = 'destination-in';
-  foregroundContext.drawImage(capture.faceMask, 0, 0, width, height);
+  foregroundContext.drawImage(softFaceMask, 0, 0);
   foregroundContext.globalCompositeOperation = 'source-over';
 
   const margin = Math.max(8, Math.round(Math.max(width, height) * 0.012));
@@ -1337,6 +1420,7 @@ function stopLiveAr(showMessage = true) {
   updateSelectedLook();
   updateLiveAiHairButton();
   if (showMessage) showToast("Live AI AR paused");
+  syncSnapLook();
 }
 
 async function startLiveAr({ automatic = false } = {}) {
@@ -1379,6 +1463,7 @@ async function startLiveAr({ automatic = false } = {}) {
       : 'Camera only - create AI hair for this style and color';
     updateSelectedLook();
     showToast('Camera ready - create AI hair to show the live hairstyle');
+    syncSnapLook();
     return true;
   } catch (error) {
     console.error("Mirrorly live AI AR initialization failed", error);
@@ -1401,6 +1486,7 @@ async function toggleLiveAr() {
 
 function startDemo() {
   if (state.liveAr) stopLiveAr(false);
+  window.MirrorlySnap?.hide();
   state.active = true;
   state.demo = true;
   state.captured = true;
@@ -1418,6 +1504,7 @@ function startDemo() {
   clearAiResult();
   renderStylePreviews();
   requestAnimationFrame(render);
+  syncSnapLook();
 }
 
 function roundedRectangle(x, y, width, height, radius) {
@@ -1891,6 +1978,8 @@ async function beginSalonCapture() {
   liveArButton.disabled = true;
   snapshotButton.disabled = true;
   privacyStatus.textContent = "Preparing local capture checks";
+  // Guided capture checks use Mirrorly's own tracking on the raw camera.
+  window.MirrorlySnap?.hide();
 
   try {
     if (!state.liveAr) {
@@ -2193,7 +2282,7 @@ async function returnToLiveMirror() {
   state.salonResults = [];
   state.salonSideSign = 0;
   salonCapturePanel.hidden = true;
-  captureFaceButton.textContent = "Create salon result";
+  captureFaceButton.textContent = SALON_BUTTON_LABEL;
   captureFaceButton.disabled = true;
   liveArButton.disabled = true;
   snapshotButton.disabled = true;
@@ -2220,6 +2309,7 @@ function cancelSalonCapture() {
   snapshotButton.disabled = false;
   privacyStatus.textContent = "Live AI tracking stays on this laptop";
   showToast("Salon capture cancelled");
+  syncSnapLook();
 }
 async function captureFace() {
   if (state.demo) {
@@ -2431,6 +2521,12 @@ function measureCaptureSkinTone(source, pose) {
   return sampleSkinTone(smallContext.getImageData(0, 0, width, height).data, width, height, width / source.width, pose);
 }
 
+// `?debugLayers` tints each live layer for diagnosing artifacts on a real
+// webcam: real-hair cover blue, AI back layer red, AI front layer green.
+function liveDebugLayers() {
+  return new URLSearchParams(location.search).has('debugLayers');
+}
+
 // Covers the customer's real hair outside the generated cut. The live hair
 // mask is filled from a background plate learned from frames where that pixel
 // was visibly room, and otherwise from push-pull interpolation of surrounding
@@ -2517,6 +2613,7 @@ function suppressLiveRealHair(pose, now) {
   const color = new Float32Array(count * 3);
   const valid = new Float32Array(count);
   const alpha = new Float32Array(count);
+  const besideFace = new Float32Array(count);
   let coveredPixels = 0;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -2525,9 +2622,14 @@ function suppressLiveRealHair(pose, now) {
       const dx = x - centerX, dy = y - centerY;
       const localX = (dx * cos + dy * sin) / Math.max(1, faceWidth);
       const localY = (-dx * sin + dy * cos) / Math.max(1, faceHeight);
-      // Eyebrows-to-chin stays real; only scalp/temple/length hair is replaced.
-      const faceDistance = Math.hypot(localX / 0.42, (localY - 0.14) / 0.4);
-      const faceProtection = 1 - smoothStep(0.85, 1.05, faceDistance);
+      // Brow-to-chin and cheek-to-cheek stay real; the full face width is
+      // protected so the cover can never cut into the cheek or jaw outline.
+      const faceDistance = Math.hypot(localX / 0.5, (localY - 0.12) / 0.42);
+      const faceProtection = 1 - smoothStep(0.9, 1.08, faceDistance);
+      // Beside the cheeks and jaw, real hair hides ear/neck in shadow, not the
+      // room. Filling there with wall colour reads as a bright gap in the face.
+      besideFace[index] = (1 - smoothStep(0.7, 1.05, Math.hypot(localX / 0.95, (localY - 0.1) / 0.7)))
+        * smoothStep(-0.25, 0, localY);
       const hair = removal.smoothed[index];
       alpha[index] = hair * (1 - faceProtection);
       if (alpha[index] >= 0.01) coveredPixels += 1;
@@ -2553,12 +2655,20 @@ function suppressLiveRealHair(pose, now) {
   if (!removal.hasCover) return;
   const filled = window.MirrorlyTracking.pushPullFill(color, valid, width, height);
   const output = removal.fillContext.createImageData(width, height);
+  const debugLayers = liveDebugLayers();
   for (let index = 0; index < count; index += 1) {
     if (alpha[index] < 0.01) continue;
     const plate = removal.plateWeight[index] ** 2;
+    const shade = besideFace[index] * 0.85;
     const pixel = index * 4;
     for (let channel = 0; channel < 3; channel += 1) {
-      output.data[pixel + channel] = removal.plate[index * 3 + channel] * plate + filled[index * 3 + channel] * (1 - plate);
+      const room = removal.plate[index * 3 + channel] * plate + filled[index * 3 + channel] * (1 - plate);
+      const shadow = skin ? skin[channel] * 0.55 : filled[index * 3 + channel] * 0.6;
+      output.data[pixel + channel] = room * (1 - shade) + shadow * shade;
+    }
+    if (debugLayers) {
+      // Diagnostic only: real-hair cover is blue.
+      output.data[pixel] = 40; output.data[pixel + 1] = 90; output.data[pixel + 2] = 255;
     }
     output.data[pixel + 3] = Math.round(255 * alpha[index]);
   }
@@ -2614,6 +2724,8 @@ function render(now = 0) {
   } else if (state.holdCapturedFrame && state.capturedFrame) {
     // Keep the untouched captured portrait visible while the hidden AR
     // placement guide is prepared and the final AI edit is processing.
+  } else if (state.liveAr && window.MirrorlySnap?.getCanvas()) {
+    // Snap renders the visible hairstyle; skip local tracking to save the CPU.
   } else if (state.liveAr) {
     window.MirrorlyAR?.update(now, {
       x: Number(controls.x.value),
@@ -2639,6 +2751,7 @@ function render(now = 0) {
 function setBeforeMode(enabled) {
   state.showOverlay = !enabled;
   beforeAfterButton.textContent = enabled ? "Showing before" : "Hold for before";
+  syncSnapLook();
 }
 
 function saveSnapshot() {
@@ -2646,7 +2759,9 @@ function saveSnapshot() {
   snapshotCanvas.width = canvas.width;
   snapshotCanvas.height = canvas.height;
   const snapshotContext = snapshotCanvas.getContext("2d");
-  snapshotContext.drawImage(canvas, 0, 0);
+  const snapCanvas = window.MirrorlySnap?.getCanvas();
+  if (snapCanvas) snapshotContext.drawImage(snapCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+  else snapshotContext.drawImage(canvas, 0, 0);
   if (state.liveAr && !arCanvas.hidden) snapshotContext.drawImage(arCanvas, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
   snapshotCanvas.toBlob((blob) => {
     if (!blob) return;

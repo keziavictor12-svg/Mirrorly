@@ -68,6 +68,19 @@ async function main() {
       const THREE = await import('./vendor/three/three.module.min.js');
       await import('./tracking.js');
       const tracking = window.MirrorlyTracking;
+      // Snap Camera Kit: the locally built bundle loads in Edge, and without a
+      // camera stream the live mirror stays on Mirrorly's own renderer.
+      const snapKit = await import('./vendor/snap/camera-kit.mjs');
+      for (const name of ['bootstrapCameraKit', 'createMediaStreamSource', 'Transform2D']) {
+        if (!snapKit[name]) throw new Error('Snap Camera Kit bundle is missing ' + name);
+      }
+      const snapShown = await window.MirrorlySnap.showLook(null, document.querySelector('.preview-card'),
+        { id: 'bob' }, { name: 'Copper', value: '#a4522f' });
+      const snapStatus = window.MirrorlySnap.getStatus();
+      if (snapShown || snapStatus.visible || window.MirrorlySnap.getCanvas()) throw new Error('Snap lens shown without configuration');
+      // Works with or without a local .env.local token: with no stream, Snap
+      // must never show, and an unconfigured install must report what is missing.
+      if (!snapStatus.configured && !snapStatus.missing.includes('SNAP_CAMERA_KIT_API_TOKEN')) throw new Error('Snap config status is wrong: ' + JSON.stringify(snapStatus));
       let result;
       vision.FaceLandmarker.createFromOptions = async () => ({
         detectForVideo: () => result,
@@ -87,8 +100,8 @@ async function main() {
       const catalog = ${JSON.stringify(catalogContext.catalog)};
       const canonicalPoints = ${JSON.stringify(canonicalFixture.points)};
       let now = 1000;
-      function frame(yaw, tx = 630, roll = 0.05) {
-        const matrix = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(0.1, yaw, roll, 'YXZ'));
+      function frame(yaw, tx = 630, roll = 0.05, pitch = 0.1) {
+        const matrix = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
         const e = matrix.elements;
         const r = [e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]];
         const points = Array.from({ length: 478 }, () => ({ x: tx / 1280, y: 0.5, z: 0 }));
@@ -313,6 +326,34 @@ async function main() {
       checkNoRepairGhost();
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
       if (!window.MirrorlyAR.getStatus(now).metrics.personalRegistration) throw new Error('Personal landmark registration did not run');
+      // A downward head tilt must not let the forehead depth mesh eat the
+      // back layer's hairline, leaving only the face-contour fringe window.
+      const bandCanvas = document.createElement('canvas'); bandCanvas.width = 1280; bandCanvas.height = 720;
+      const bandContext = bandCanvas.getContext('2d'); bandContext.drawImage(portrait, 0, 0);
+      const band = { x: Math.round(capturePose.foreheadX - capturePose.faceWidth * 0.6), y: Math.round(capturePose.foreheadY - capturePose.faceHeight * 0.3),
+        w: Math.round(capturePose.faceWidth * 1.2), h: Math.round(capturePose.faceHeight * 0.42) };
+      bandContext.fillStyle = '#5a3524'; bandContext.fillRect(band.x, band.y, band.w, band.h);
+      const bandMask = mask(); maskRect(bandMask, band.x, band.y, band.w, band.h);
+      const bandImage = new Image(); bandImage.src = bandCanvas.toDataURL('image/png'); await bandImage.decode();
+      const bandLayer = buildLiveAiMergedLayer(bandImage, { ...fixtureCapture, originalHairMask: null }, bandMask);
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
+      window.MirrorlyAR.setHair(bandLayer.source, bandLayer.profile, '#70432f', bandLayer.foregroundSource, null);
+      const hairAlphaSum = () => {
+        const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+        markerGl.readPixels(0, 0, canvas.width, canvas.height, markerGl.RGBA, markerGl.UNSIGNED_BYTE, pixels);
+        let sum = 0;
+        for (let i = 3; i < pixels.length; i += 4) sum += pixels[i];
+        return sum;
+      };
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true);
+      for (let i = 0; i < 20; i++) frame(0, 630, 0.05, 0.1);
+      const levelHair = hairAlphaSum();
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true);
+      for (let i = 0; i < 20; i++) frame(0, 630, 0.3, 0.45);
+      const pitchedHair = hairAlphaSum();
+      if (pitchedHair < levelHair * 0.85) throw new Error('Hairline hidden by the face mesh when pitched down: ' + (pitchedHair / levelHair).toFixed(3));
+      window.MirrorlyAR.setHair(merged.source, merged.profile, '#70432f', merged.foregroundSource, merged.repairSource);
+      window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true); frame(0);
 
       // Multi-view: a side salon view takes over where a single front view hides.
       window.MirrorlyAR.setEnabled(false); window.MirrorlyAR.setEnabled(true);
@@ -354,8 +395,10 @@ async function main() {
         context.fillStyle = '#4a7fb0'; context.fillRect(0, 0, 1280, 720);
         context.fillStyle = '#d9a383'; context.beginPath(); context.ellipse(640, 380, 95, 125, 0, 0, Math.PI * 2); context.fill();
         context.fillStyle = '#140c08'; context.fillRect(520, 150, 240, 110);
+        context.fillRect(738, 360, 62, 110);
         const liveMask = { width: 320, height: 180, data: new Float32Array(320 * 180), version: 1, at: 0 };
         for (let y = 38; y < 65; y++) for (let x = 130; x < 190; x++) liveMask.data[y * 320 + x] = 1;
+        for (let y = 90; y < 118; y++) for (let x = 185; x < 200; x++) liveMask.data[y * 320 + x] = 1;
         window.MirrorlyAR.getLiveHairMask = () => liveMask;
         const removalPose = { faceCenterX: 640, faceCenterY: 380, faceWidth: 190, faceHeight: 250, roll: 0 };
         resetLiveHairRemoval();
@@ -364,6 +407,10 @@ async function main() {
         const removed = px(560, 175), cheek = px(640, 420);
         if (removed[0] + removed[1] + removed[2] < 200 || removed[2] < 100) throw new Error('Real hair was not replaced by surrounding background: ' + removed);
         if (Math.abs(cheek[0] - 0xd9) > 2 || Math.abs(cheek[1] - 0xa3) > 2) throw new Error('Face pixels were altered by real-hair removal: ' + cheek);
+        // Hair beside the cheek becomes warm shadow, never the (blue) wall.
+        const besideCheek = px(768, 420), cheekEdge = px(726, 400);
+        if (besideCheek[0] < besideCheek[2] + 15 || besideCheek[0] + besideCheek[1] + besideCheek[2] < 120) throw new Error('Hair beside the cheek was filled with room colour: ' + besideCheek);
+        if (Math.abs(cheekEdge[0] - 0xd9) > 3 || Math.abs(cheekEdge[1] - 0xa3) > 3) throw new Error('Cheek outline was cut by real-hair removal: ' + cheekEdge);
       } finally {
         window.MirrorlyAR.getLiveHairMask = savedLiveMask;
         resetLiveHairRemoval();
@@ -548,7 +595,7 @@ async function main() {
       await beginSalonCapture();
       if (salonCapturePanel.hidden || !state.salonCaptureActive || state.salonCaptureIndex !== 0
         || salonCaptureTitle.textContent !== 'Capture the front view') {
-        throw new Error('Create salon result did not open the guided capture panel');
+        throw new Error('See realistic result did not open the guided capture panel');
       }
       cancelSalonCapture();
       window.MirrorlyAR.prepareHairSegmentation = savedSalonPrepare;
