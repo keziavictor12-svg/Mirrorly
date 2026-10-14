@@ -27,7 +27,7 @@ Read this first in a new chat; it is the hand-off point.
 - `npm run test:snap` and `node tests/snap-webcam-probe.cjs` both pass with `bob` (2026-10-12).
 - Also done (2026-10-08 webcam feedback): the real-hair cover no longer paints a wall-coloured wedge beside the cheek, and the front over-face AI layer feathers its edge and retires from 20° to 35°.
 
-**Committed (2026-10-14):** the Snap integration, preview framing, demo lenses, cheek and front-layer fixes, `?debugLayers`, tests and docs are in commit `d212236` on `main`, at the user's request. **Not pushed yet**; ask before pushing (the repo is public). Left untracked on purpose: the DeepAR and RK3588 work, `public/assets/deepar/`, the root `hair_segmenter.tflite` copy and two unreferenced review GLBs (`review-short-messy.glb`, `review-short03-raw.glb`). The `lens-studio/` folder is outside the repo. Never stage `.env.local`, `.env.local.bak*` or `public/vendor/snap/`.
+**Committed (2026-10-14):** the Snap integration, preview framing, demo lenses, cheek and front-layer fixes, `?debugLayers`, tests and docs are in commit `d212236` on `main`, at the user's request. **Pushed** to `origin/main` on 2026-10-14 (the user confirmed the repo stays public). Later commits: ask before pushing. Left untracked on purpose: the DeepAR and RK3588 work, `public/assets/deepar/`, the root `hair_segmenter.tflite` copy and two unreferenced review GLBs (`review-short-messy.glb`, `review-short03-raw.glb`). The `lens-studio/` folder is outside the repo. Never stage `.env.local`, `.env.local.bak*` or `public/vendor/snap/`.
 
 **Latest (2026-10-12, late): the user is still not satisfied with the men's cuts, and Feather "is a mess".** Decision (user): save a new Feather and write a lens-creator brief. **Feather** is now Straight Long (0.8, density 80, width 0.84) plus Wavy's "Big Wavy Gradient Secondary" (Wavy's top HairVisual disabled), saved but **not yet re-published**. Tried and rejected: adding Smooth Straight as a middle layer (it looked like a bob with extensions). The template has reached its limits (fixed groom shapes, no stubble or fades). **Lens creator brief:** Claude Docs doc "Mirrorly Lens Creator Brief", https://claude.ai/code/artifact/6cb3b50e-e7cb-49ad-ac01-33ff2948d232 (private until the user shares it). It covers the eight lens names, look and must-haves, the `hairColor` hex values, Lens Studio 5.24 / SDK 1.22.0, hiding real hair, performance, acceptance checks, and a reference-image mapping. Next: the user republishes Feather (and the 4 men's updates, if not done), shares the brief with a creator, and gets Snap approval → `test:snap` → check in Edge.
 
@@ -58,14 +58,14 @@ Read this first in a new chat; it is the hand-off point.
 
 | Lens | Project | Build | Published | In group |
 |---|---|---|---|---|
-| `bob` | `lens-studio\bob\bob` | done | yes | yes |
-| `feather` | `lens-studio\feather\feather` | done (Wavy + secondary layer, Hair Brown) | submitted, in review | — |
-| `v-cut` | `lens-studio\v-cut\v-cut` | done (Long Hair → Straight Long only, Hair Brown; strands look a little thin) | submitted, in review | — |
-| `u-cut` | `lens-studio\u-cut\u-cut` | done: **Straight Long**, same as `v-cut` (user's choice; Messy Long looked like a shag with strands across the face) | submitted, in review | — |
-| `crew-cut` | `lens-studio\crew-cut\crew-cut` | done: Short Hair → **Short Sleek** (not Casual Short Straight, which renders as a chin-length mop; Pointy is a novelty spike), **dark brown** | submitted, in review | — |
-| `curtain-bangs` | `lens-studio\curtain-bangs\curtain-bangs` | done: Mid-Length → **Smooth Straight Gradient** (the `bob` base) with `strandCut` **0.55**, dark brown: a middle part with the fringe to both sides, ending just above the jaw. Wavy was too big and long | submitted, in review | — |
-| `buzz-cut` | `lens-studio\buzz-cut\buzz-cut` | done: Short Hair → **Short Sleek** with `strandCut` **0.2**, dark brown: a short textured top. The sides look bald rather than stubbly (the template can't draw stubble). Real hair was fully hidden on `Idle Person 1`. 0.35 was a spiky crop. In this copy, Smooth Straight's `strandCut` was reset to 1 | submitted, in review | — |
-| `skin-fade` | `lens-studio\skin-fade\skin-fade` | done: Short Hair → **Short Sleek** with `strandCut` **0.5**, dark brown: a textured top with length and bare, close sides. It sits between buzz (0.2) and crew (1.0) | submitted, in review | — |
+| `bob` | `lens-studio\bob\bob` | done | yes, live 2026-10-14 (less-shine update) | yes |
+| `feather` | `lens-studio\feather\feather` | done (Wavy + secondary layer, Hair Brown) | yes, live 2026-10-14 (less-shine update) | yes |
+| `v-cut` | `lens-studio\v-cut\v-cut` | done (Long Hair → Straight Long only, Hair Brown; strands look a little thin) | yes, live 2026-10-14 (less-shine update) | yes |
+| `u-cut` | `lens-studio\u-cut\u-cut` | done: **Straight Long**, same as `v-cut` (user's choice; Messy Long looked like a shag with strands across the face) | yes, live 2026-10-14 (less-shine update) | yes |
+| `crew-cut` | `lens-studio\crew-cut\crew-cut` | done: Short Hair → **Short Sleek** (not Casual Short Straight, which renders as a chin-length mop; Pointy is a novelty spike), **dark brown** | yes, live 2026-10-14 (less-shine update) | yes |
+| `curtain-bangs` | `lens-studio\curtain-bangs\curtain-bangs` | done: Mid-Length → **Smooth Straight Gradient** (the `bob` base) with `strandCut` **0.55**, dark brown: a middle part with the fringe to both sides, ending just above the jaw. Wavy was too big and long | yes, live 2026-10-14 (less-shine update) | yes |
+| `buzz-cut` | `lens-studio\buzz-cut\buzz-cut` | done: Short Hair → **Short Sleek** with `strandCut` **0.2**, dark brown: a short textured top. The sides look bald rather than stubbly (the template can't draw stubble). Real hair was fully hidden on `Idle Person 1`. 0.35 was a spiky crop. In this copy, Smooth Straight's `strandCut` was reset to 1 | yes, live 2026-10-14 (less-shine update) | yes |
+| `skin-fade` | `lens-studio\skin-fade\skin-fade` | done: Short Hair → **Short Sleek** with `strandCut` **0.5**, dark brown: a textured top with length and bare, close sides. It sits between buzz (0.2) and crew (1.0) | yes, live 2026-10-14 (less-shine update) | yes |
 
 **Shortening hair:** `HairVisual.strandCut` is the fraction of each strand's length that is kept (template values 0.675–1). 1.0 → 0.7 shortens Smooth Straight from the jaw to the mouth; 0.55 is only a little shorter. Try it for `buzz-cut` and `skin-fade`.
 
@@ -352,7 +352,7 @@ The browser tests use synthetic landmarks, masks and mocked API responses. Passi
 
 ## Known limitations
 
-- **Snap:** all eight styles have a lens (2026-10-12). The published versions ignore Mirrorly's colour choice until the colour-script update is re-published and approved. They show template sparkles (kept by the user). `u-cut` and `v-cut` look identical from the front, and the buzz cut has bald rather than stubbly sides. The template hides real hair only near the head, so long hair below the jaw stays visible under short cuts. The staging watermark is shown until production approval.
+- **Snap:** all eight styles have a lens (2026-10-12). The live versions (2026-10-14) follow Mirrorly's colour choice and have the reduced shine. They show template sparkles (kept by the user). `u-cut` and `v-cut` differ only in length (shoulder vs mid-chest), and the buzz cut has bald rather than stubbly sides. The template hides real hair only near the head, so long hair below the jaw stays visible under short cuts. The staging watermark is shown until production approval.
 
 - Live AI hair is 2.5D: one view, or three after a salon result, extracted from generated photos. There is no back-of-head view, and ear- and hand-level occlusion is approximate.
 - Real-hair removal fill:
